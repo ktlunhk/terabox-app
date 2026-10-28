@@ -1518,6 +1518,41 @@ public class MainActivity extends Activity {
 		pm.show();
 	}
 
+	/** A screen-bounded, automatically scrolling alternative to a tall PopupMenu. */
+	void showScrollablePopupItems(final PopupMenu popup) {
+		final android.view.Menu menu = popup.getMenu();
+		final ArrayList<android.view.MenuItem> items = new ArrayList<android.view.MenuItem>();
+		final ArrayList<String> labels = new ArrayList<String>();
+		for (int i = 0; i < menu.size(); i++) {
+			android.view.MenuItem item = menu.getItem(i);
+			if (item.isVisible()) {
+				items.add(item);
+				labels.add(item.getTitle().toString());
+			}
+		}
+		final ListView list = new ListView(this);
+		list.setDividerHeight(0);
+		list.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels));
+		final AlertDialog dialog = new AlertDialog.Builder(this).setView(list).create();
+		list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+			public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+				int actionId = items.get(position).getItemId();
+				dialog.dismiss();
+				menu.performIdentifierAction(actionId, 0);
+			}
+		});
+		dialog.show();
+		android.view.Window window = dialog.getWindow();
+		if (window != null) {
+			android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+			int maxHeight = (int)(dm.heightPixels * 0.75f);
+			int rowHeight = dp(52);
+			int wanted = Math.min(maxHeight, rowHeight * items.size() + dp(16));
+			window.setLayout(Math.min(dm.widthPixels - dp(32), dp(320)), wanted);
+			window.setGravity(Gravity.CENTER);
+		}
+	}
+
 	void showRowMenu(final TeraEntry e, View anchor) {
 		PopupMenu pm = new PopupMenu(this, anchor);
 		if (!e.isDir && TextEditor.isEditableName(e.name))
@@ -1588,7 +1623,7 @@ public class MainActivity extends Activity {
 				return true;
 			}
 		});
-		pm.show();
+		showScrollablePopupItems(pm);
 	}
 
 	boolean canPreview(TeraEntry e) {
