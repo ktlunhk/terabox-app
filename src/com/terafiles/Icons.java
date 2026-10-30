@@ -131,7 +131,17 @@ class Icons {
 		}
 
 		void shape(Canvas c) {
-			if (name.equals("folder")) {
+			if (name.equals("home")) { // solid house
+				p.setStyle(Paint.Style.FILL_AND_STROKE);
+				p.setStrokeWidth(1.2f);
+				poly(c, 12f, 3f, 2.5f, 11.5f, 5.5f, 11.5f, 5.5f, 20.5f, 10f, 20.5f, 10f, 14.5f, 14f, 14.5f, 14f, 20.5f, 18.5f, 20.5f, 18.5f, 11.5f, 21.5f, 11.5f);
+			} else if (name.equals("updir")) { // arrow turning up out of a folder level
+				p.setStrokeWidth(3f);
+				p.setStrokeCap(Paint.Cap.BUTT);
+				line(c, 5f, 19f, 17f, 19f, 17f, 7f);
+				p.setStrokeCap(Paint.Cap.ROUND);
+				line(c, 11.5f, 10.5f, 17f, 5f, 22.5f, 10.5f);
+			} else if (name.equals("folder")) {
 				poly(c, 3f, 5f, 9.5f, 5f, 11.5f, 7.5f, 21f, 7.5f, 21f, 19.5f, 3f, 19.5f);
 			} else if (name.equals("file")) {
 				page(c);
