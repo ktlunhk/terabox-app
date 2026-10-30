@@ -891,6 +891,13 @@ public class MainActivity extends Activity {
 		return bar;
 	}
 
+	void pageTitleIcon(TextView title, String glyph) {
+		android.graphics.drawable.Drawable d = Icons.get(glyph, title.getCurrentTextColor());
+		d.setBounds(0, 0, dp(17), dp(17));
+		title.setCompoundDrawables(d, null, null, null);
+		title.setCompoundDrawablePadding(dp(6));
+	}
+
 	void showError(String m) {
 		new DragBuilder(this).setTitle("Error").setMessage(m).setPositiveButton("OK", null).show();
 	}
@@ -3674,6 +3681,7 @@ public class MainActivity extends Activity {
 			}
 		}, null, null, null), new LinearLayout.LayoutParams(-1, -2));
 		settingsTitle[0].setText("Settings");
+		pageTitleIcon(settingsTitle[0], "gear");
 
 		ScrollView sv = new ScrollView(this);
 		LinearLayout box = new LinearLayout(this);
@@ -3797,6 +3805,7 @@ public class MainActivity extends Activity {
 			}
 		}, mo), new LinearLayout.LayoutParams(-1, -2));
 		trashTitle = t[0];
+		pageTitleIcon(trashTitle, "trash");
 		trashLoad = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
 		trashLoad.setIndeterminate(true);
 		trashLoad.setVisibility(View.INVISIBLE);
@@ -4022,6 +4031,7 @@ public class MainActivity extends Activity {
 			}
 		}, null, null), new LinearLayout.LayoutParams(-1, -2));
 		t[0].setText("Shared links");
+		pageTitleIcon(t[0], "link");
 		shareLoad = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
 		shareLoad.setIndeterminate(true);
 		root.addView(shareLoad, new LinearLayout.LayoutParams(-1, dp(3)));
