@@ -37,14 +37,16 @@ public class PreviewActivity extends Activity {
         LinearLayout root=new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.BLACK);
+        float d=getResources().getDisplayMetrics().density;
         LinearLayout bar=new LinearLayout(this);
         bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        TextView back=new TextView(this);back.setText("‹  ");back.setTextSize(32);back.setTextColor(Color.WHITE);back.setPadding(16,8,12,8);
+        bar.setPadding(0,(int)(MainActivity.BAR_TOP_DP*d),0,0); // same height as the other title bars
+        TextView back=new TextView(this);back.setText("\u2190");back.setTextSize(22);back.setTextColor(Color.WHITE);back.setGravity(android.view.Gravity.CENTER);back.setPadding((int)(16*d),0,(int)(12*d),0);
         back.setOnClickListener(new View.OnClickListener(){public void onClick(View v){finish();}});
-        bar.addView(back);
-        TextView title=new TextView(this);title.setText(name);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);title.setTextColor(Color.WHITE);title.setTextSize(17);
-        bar.addView(title,new LinearLayout.LayoutParams(0,-2,1));
-        root.addView(bar);
+        bar.addView(back,new LinearLayout.LayoutParams(-2,(int)(MainActivity.BAR_ROW_DP*d)));
+        TextView title=new TextView(this);title.setText(name);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);title.setTextColor(Color.WHITE);title.setTextSize(17);title.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        bar.addView(title,new LinearLayout.LayoutParams(0,(int)(MainActivity.BAR_ROW_DP*d),1));
+        root.addView(bar,new LinearLayout.LayoutParams(-1,(int)((MainActivity.BAR_TOP_DP+MainActivity.BAR_ROW_DP)*d)));
         setContentView(root);
         try {
             if(lower.endsWith(".pdf")) {
