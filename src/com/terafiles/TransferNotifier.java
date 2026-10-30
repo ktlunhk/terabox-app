@@ -98,7 +98,7 @@ public class TransferNotifier {
 		j.text = "Starting...";
 		boolean first = jobs.isEmpty();
 		jobs.put(j.id, j);
-		nm().notify(j.id, build(j));
+		// Detailed progress stays inside the app.
 		if (first) {
 			Intent si = new Intent(app, TransferService.class);
 			try {
@@ -125,7 +125,7 @@ public class TransferNotifier {
 		if (now - j.lastNotify < 700 && !(total > 0 && done >= total))
 			return;
 		j.lastNotify = now;
-		nm().notify(id, build(j));
+		// No per-file progress notification.
 	}
 
 	/** the job is over; its ongoing notification goes away */
@@ -151,22 +151,21 @@ public class TransferNotifier {
 			return;
 		j.cancel[0] = true;
 		j.text = "Cancelling...";
-		nm().notify(id, build(j));
+		// No per-file progress notification.
 	}
 
-	/** the notification the service shows in the foreground (the oldest running job) */
+	/** Minimal mandatory Android foreground-service notification. */
 	static synchronized Notification foreground() {
-		if (jobs.isEmpty()) {
-			Notification.Builder b = builder();
-			b.setSmallIcon(android.R.drawable.stat_sys_download);
-			b.setContentTitle("TeraFiles");
-			b.setContentText("Finishing...");
-			fgId = STUB_ID;
-			return b.build();
-		}
-		Entry j = jobs.values().iterator().next();
-		fgId = j.id;
-		return build(j);
+		Notification.Builder b = builder();
+		b.setSmallIcon(android.R.drawable.stat_sys_upload);
+		b.setContentTitle("TeraFiles");
+		b.setContentText("File transfer running");
+		b.setOngoing(true);
+		b.setOnlyAlertOnce(true);
+		b.setContentIntent(openApp());
+		if (Build.VERSION.SDK_INT < 26) b.setPriority(Notification.PRIORITY_MIN);
+		fgId = STUB_ID;
+		return b.build();
 	}
 
 	/** make s a foreground service showing the current foreground notification */
