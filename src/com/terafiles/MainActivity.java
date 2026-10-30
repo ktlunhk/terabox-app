@@ -21,6 +21,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.text.InputType;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.text.TextUtils;
 import android.util.Base64;
 import android.view.Gravity;
@@ -1224,7 +1226,7 @@ public class MainActivity extends Activity {
 		selAll = new CheckBox(this);
 		selAll.setText("Select all");
 		selAll.setTextColor(TEXT);
-		selAll.setPadding(dp(14), dp(4), dp(8), dp(4)); // box lines up with the row checkboxes below
+		selAll.setPadding(dp(6), dp(8), dp(6), dp(8)); // match each file-row checkbox padding
 		selAll.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
 				sel.clear();
@@ -1237,6 +1239,7 @@ public class MainActivity extends Activity {
 		LinearLayout sortRow = new LinearLayout(this);
 		sortRow.setOrientation(LinearLayout.HORIZONTAL);
 		sortRow.setGravity(Gravity.CENTER_VERTICAL);
+		sortRow.setPadding(dp(6), 0, 0, 0); // match file-row left inset
 		sortRow.addView(selAll, new LinearLayout.LayoutParams(0, -2, 1));
 		sortLabel = mkText(sortName(), 14, TEXT);
 		sortLabel.setGravity(Gravity.CENTER_VERTICAL);
@@ -2143,7 +2146,12 @@ public class MainActivity extends Activity {
 		in.setSingleLine(true);
 		int dot = e.name.lastIndexOf('.');
 		in.setSelection(0, !e.isDir && dot > 0 ? dot : e.name.length());
-		new DragBuilder(this).setTitle("Rename").setView(in)
+		// Match the horizontal input margins used by the Create dialog.
+		LinearLayout renameBox = new LinearLayout(this);
+		renameBox.setOrientation(LinearLayout.VERTICAL);
+		renameBox.setPadding(dp(20), dp(8), dp(20), 0);
+		renameBox.addView(in);
+		new DragBuilder(this).setTitle("Rename").setView(renameBox)
 				.setPositiveButton("OK", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						final String nn = in.getText().toString().trim();
@@ -2353,6 +2361,7 @@ public class MainActivity extends Activity {
 	// ---- create
 
 	void askCreate() {
+		final String dirNow = curDir;
 		LinearLayout box = new LinearLayout(this);
 		box.setOrientation(LinearLayout.VERTICAL);
 		box.setPadding(dp(20), dp(8), dp(20), 0);
@@ -2369,27 +2378,91 @@ public class MainActivity extends Activity {
 		in.setHint("Name");
 		in.setSingleLine(true);
 		box.addView(in);
-		new DragBuilder(this).setTitle("Create in " + curDir).setView(box)
-				.setPositiveButton("Create", new DialogInterface.OnClickListener() {
-					public void onClick(DialogInterface d, int w) {
-						final String nn = in.getText().toString().trim();
-						if (nn.length() == 0 || nn.indexOf('/') >= 0) {
-							toast("Enter a name without /");
-							return;
-						}
-						final boolean folder = rf.isChecked();
-						final String dirNow = curDir;
-						final String remote = (dirNow.equals("/") ? "" : dirNow) + "/" + nn;
-						runJob("Creating...", new Job() {
-							public String run(TeraClient c) throws Exception {
-								if (folder)
-									return chk(c.mkdir(remote), "Create folder");
-								c.uploadFile(emptyFile(), dirNow, nn, null);
-								return null;
-							}
-						}, afterFilesChange);
+		final TextView error = new TextView(this);
+		error.setTextColor(ERR);
+		error.setTextSize(12);
+		error.setVisibility(View.GONE);
+		box.addView(error);
+		final AlertDialog dialog = new DragBuilder(this).setTitle("Create in " + dirNow).setView(box)
+				.setPositiveButton("Create", null).setNegativeButton("Cancel", null).create();
+		final Runnable validate = new Runnable() {
+			public void run() {
+				String nn = in.getText().toString().trim();
+				String message = null;
+				if (nn.length() == 0) message = "Enter a name";
+				else if (nn.equals(".") || nn.equals("..") || nn.indexOf('/') >= 0 || nn.indexOf('\\') >= 0)
+					message = "Invalid file or folder name";
+				else {
+					for (TeraEntry e : entries) {
+						if (nn.equals(e.name)) { message = "A file or folder with this name already exists"; break; }
 					}
-				}).setNegativeButton("Cancel", null).show();
+				}
+				error.setText(message == null ? "" : message);
+				error.setVisibility(message == null || nn.length() == 0 ? View.GONE : View.VISIBLE);
+				Button create = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+				if (create != null) create.setEnabled(message == null);
+			}
+		};
+		in.addTextChangedListener(new TextWatcher() {
+			public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+			public void onTextChanged(CharSequence s, int start, int before, int count) { validate.run(); }
+			public void afterTextChanged(Editable e) {}
+		});
+		dialog.show();
+		validate.run();
+		dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
+			public void onClick(View v) {
+				validate.run();
+				if (!dialog.getButton(DialogInterface.BUTTON_POSITIVE).isEnabled()) return;
+				final String nn = in.getText().toString().trim();
+				final boolean folder = rf.isChecked();
+				final String remote = (dirNow.equals("/") ? "" : dirNow) + "/" + nn;
+				dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(false);
+				error.setText("Checking name...");
+				error.setVisibility(View.VISIBLE);
+				final TeraClient c = client;
+				exec.execute(new Runnable() {
+					public void run() {
+						try {
+							JSONObject result = c.listAll(dirNow);
+							if (result.optInt("errno", 0) != 0 || result.optJSONArray("list") == null)
+								throw new Exception("Unable to verify folder contents");
+							JSONArray items = result.optJSONArray("list");
+							boolean duplicate = false;
+							for (int i = 0; i < items.length(); i++)
+								if (nn.equals(items.getJSONObject(i).optString("server_filename"))) { duplicate = true; break; }
+							final boolean exists = duplicate;
+							runOnUiThread(new Runnable() {
+								public void run() {
+									if (!dialog.isShowing()) return;
+									if (exists) {
+										error.setText("A file or folder with this name already exists");
+										dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(false);
+										return;
+									}
+									dialog.dismiss();
+									runJob("Creating...", new Job() {
+										public String run(TeraClient c) throws Exception {
+											if (folder) return chk(c.mkdir(remote), "Create folder");
+											c.uploadFile(emptyFile(), dirNow, nn, null);
+											return null;
+										}
+									}, afterFilesChange);
+								}
+							});
+						} catch (final Exception ex) {
+							runOnUiThread(new Runnable() {
+								public void run() {
+									if (!dialog.isShowing()) return;
+									error.setText("Could not check name: " + ex.getMessage());
+									dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
+								}
+							});
+						}
+					}
+				});
+			}
+		});
 	}
 
 	File emptyFile() throws Exception {
