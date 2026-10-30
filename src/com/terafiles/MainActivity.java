@@ -253,6 +253,30 @@ public class MainActivity extends Activity {
 		return bt;
 	}
 
+	/** compact rounded button (search page and similar) */
+	/** line icon (see Icons) on the left of a text, e.g. the outlined folder */
+	void setIcon(TextView tv, String icon, int color) {
+		android.graphics.drawable.Drawable d = Icons.get(icon, color);
+		d.setBounds(0, 0, dp(22), dp(22));
+		tv.setCompoundDrawables(d, null, null, null);
+		tv.setCompoundDrawablePadding(dp(10));
+	}
+
+	Button mkSmallBtn(String s, int color) {
+		Button bt = mkBtn(s);
+		bt.setTextSize(14);
+		bt.setMinWidth(0);
+		bt.setMinimumWidth(0);
+		bt.setMinHeight(0);
+		bt.setMinimumHeight(0);
+		bt.setPadding(dp(18), 0, dp(18), 0);
+		GradientDrawable g = new GradientDrawable();
+		g.setColor(color);
+		g.setCornerRadius(dp(8));
+		bt.setBackground(g);
+		return bt;
+	}
+
 	void styleEdit(EditText e, String hint) {
 		e.setHint(hint);
 		e.setHintTextColor(MUTED);
@@ -839,24 +863,24 @@ public class MainActivity extends Activity {
 		bar.setOrientation(LinearLayout.HORIZONTAL);
 		bar.setGravity(Gravity.CENTER_VERTICAL);
 		bar.setBackgroundColor(PANEL);
-		TextView lb = mkText(leftGlyph, 24, TEXT);
-		lb.setPadding(dp(16), dp(12), dp(12), dp(12));
+		bar.setPadding(0, dp(BAR_TOP_DP), 0, 0); // same height as the file list header (storage line + button row)
+		bar.setMinimumHeight(dp(BAR_TOP_DP + BAR_ROW_DP));
+		TextView lb = barGlyph(leftGlyph, 16, 12);
 		lb.setOnClickListener(left);
 		bar.addView(lb);
 		TextView title = mkText("", 17, TEXT);
 		title.setSingleLine(true);
 		title.setEllipsize(TextUtils.TruncateAt.START);
-		bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+		bar.addView(title, new LinearLayout.LayoutParams(0, dp(BAR_ROW_DP), 1));
+		title.setGravity(Gravity.CENTER_VERTICAL);
 		titleOut[0] = title;
 		if (refresh != null) {
-			TextView rf = mkText("\u21BB", 24, TEXT);
-			rf.setPadding(dp(12), dp(12), dp(12), dp(12));
+			TextView rf = barGlyph("\u21BB", 12, 12);
 			rf.setOnClickListener(refresh);
 			bar.addView(rf);
 		}
 		if (more != null) {
-			TextView mb = mkText("\u22EE", 24, TEXT);
-			mb.setPadding(dp(12), dp(12), dp(16), dp(12));
+			TextView mb = barGlyph("\u22EE", 12, 16);
 			mb.setOnClickListener(more);
 			bar.addView(mb);
 			if (moreOut != null)
@@ -1135,8 +1159,7 @@ public class MainActivity extends Activity {
 		fileBar.setOrientation(LinearLayout.HORIZONTAL);
 		fileBar.setGravity(Gravity.CENTER_VERTICAL);
 		fileBar.setBackgroundColor(PANEL);
-		TextView home = mkText("\u2302", 25, TEXT);
-		home.setPadding(dp(16), dp(12), dp(10), dp(12));
+		View home = iconButton("home", ACCENT, 16, 8);
 		home.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) { loadDir("/", false); }
 		});
@@ -1148,28 +1171,30 @@ public class MainActivity extends Activity {
 		LinearLayout crumbs = new LinearLayout(this);
 		crumbs.setOrientation(LinearLayout.HORIZONTAL);
 		crumbs.setGravity(Gravity.CENTER_VERTICAL);
-		pathScroll.addView(crumbs, new android.widget.FrameLayout.LayoutParams(-2, -1));
+		LinearLayout pathRow = new LinearLayout(this);
+		pathRow.setOrientation(LinearLayout.HORIZONTAL);
+		pathRow.setGravity(Gravity.CENTER_VERTICAL);
+		pathRow.addView(crumbs);
+		pathScroll.addView(pathRow, new android.widget.FrameLayout.LayoutParams(-2, -1));
 		fileBar.addView(pathScroll, new LinearLayout.LayoutParams(0, -2, 1));
 		fileBreadcrumbs = crumbs;
+		filePathScroll = pathScroll;
 		TextView pathTitle = mkText("", 17, TEXT);
 		pathTitle.setSingleLine(true);
-		fileBar.addView(pathTitle, new LinearLayout.LayoutParams(0, -2));
+		fileBar.addView(pathTitle, new LinearLayout.LayoutParams(0, -2, 1));
 		titleView = pathTitle;
-		TextView parentButton = mkText("\u2B06", 22, ACCENT);
-		parentButton.setPadding(dp(10), dp(12), dp(10), dp(12));
+		View parentButton = iconButton("updir", ACCENT, 10, 10);
 		parentButton.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) { goUp(); }
 		});
-		fileBar.addView(parentButton);
+		pathRow.addView(parentButton); // right beside the path
 		fileParentButton = parentButton;
-		TextView refreshButton = mkText("\u21BB", 24, TEXT);
-		refreshButton.setPadding(dp(12), dp(12), dp(12), dp(12));
+		TextView refreshButton = barGlyph("\u21BB", 12, 12);
 		refreshButton.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) { reloadCurrent(); }
 		});
 		fileBar.addView(refreshButton);
-		TextView moreButton = mkText("\u22EE", 24, TEXT);
-		moreButton.setPadding(dp(12), dp(12), dp(16), dp(12));
+		TextView moreButton = barGlyph("\u22EE", 12, 16);
 		moreButton.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) { showTopMenu(v); }
 		});
@@ -1180,10 +1205,11 @@ public class MainActivity extends Activity {
 		header.setBackgroundColor(PANEL);
 		quotaTop = mkText(quotaText, 11, MUTED);
 		quotaTop.setSingleLine(true);
-		quotaTop.setPadding(dp(16), dp(4), dp(16), 0);
-		quotaTop.setVisibility(quotaText.length() > 0 ? View.VISIBLE : View.GONE);
-		header.addView(quotaTop, new LinearLayout.LayoutParams(-1, -2));
-		header.addView(fileBar, new LinearLayout.LayoutParams(-1, -2));
+		quotaTop.setPadding(dp(16), 0, dp(16), 0);
+		quotaTop.setGravity(Gravity.CENTER_VERTICAL);
+		quotaTop.setVisibility(quotaText.length() > 0 ? View.VISIBLE : View.INVISIBLE); // keeps the header height
+		header.addView(quotaTop, new LinearLayout.LayoutParams(-1, dp(BAR_TOP_DP)));
+		header.addView(fileBar, new LinearLayout.LayoutParams(-1, dp(BAR_ROW_DP)));
 		root.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
 		loadBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -1198,7 +1224,7 @@ public class MainActivity extends Activity {
 		selAll = new CheckBox(this);
 		selAll.setText("Select all");
 		selAll.setTextColor(TEXT);
-		selAll.setPadding(dp(8), dp(4), dp(8), dp(4));
+		selAll.setPadding(dp(14), dp(4), dp(8), dp(4)); // box lines up with the row checkboxes below
 		selAll.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
 				sel.clear();
@@ -1297,22 +1323,52 @@ public class MainActivity extends Activity {
 		int n = selectedEntries().size();
 		selAll.setChecked(!entries.isEmpty() && n == entries.size());
 		updateTitle();
-		selAll.setVisibility(entries.isEmpty() ? View.GONE : View.VISIBLE);
+		selAll.setVisibility(entries.isEmpty() ? View.INVISIBLE : View.VISIBLE); // keeps the sort controls on the right
 		adapter.notifyDataSetChanged();
 	}
 
-	TextView fileParentButton;
+	View fileParentButton;
+	android.widget.HorizontalScrollView filePathScroll;
+
+	/** a small tappable drawn icon (see Icons) */
+	// Every title bar has the same height: a small top gap (the storage line on the file list) + one content row.
+	static final int BAR_TOP_DP = 14, BAR_ROW_DP = 32, BAR_ICON_DP = 18;
+
+	/** home / parent icon: drawn about as large as the 17sp path text, in a row exactly as high as the title bar row */
+	android.widget.ImageView iconButton(String icon, int color, int left, int right) {
+		return iconButton(icon, color, left, right, BAR_ICON_DP, BAR_ROW_DP);
+	}
+
+	android.widget.ImageView iconButton(String icon, int color, int left, int right, int sizeDp, int heightDp) {
+		android.widget.ImageView v = new android.widget.ImageView(this);
+		v.setImageDrawable(Icons.get(icon, color));
+		v.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+		int vp = Math.max(0, (heightDp - sizeDp) / 2);
+		v.setPadding(dp(left), dp(vp), dp(right), dp(vp));
+		v.setLayoutParams(new LinearLayout.LayoutParams(dp(sizeDp + left + right), dp(heightDp)));
+		return v;
+	}
+
+	/** a text glyph button (back / refresh / more) filling the title bar row */
+	TextView barGlyph(String glyph, int padLeft, int padRight) {
+		TextView t = mkText(glyph, 22, TEXT);
+		t.setGravity(Gravity.CENTER);
+		t.setPadding(dp(padLeft), 0, dp(padRight), 0);
+		t.setLayoutParams(new LinearLayout.LayoutParams(-2, dp(BAR_ROW_DP)));
+		return t;
+	}
 	LinearLayout fileBreadcrumbs;
 
 	void updateTitle() {
 		if (screen != SCREEN_FILES)
 			return;
-		boolean showCrumbs = sel.isEmpty() && searchTerm == null;
+		boolean showCrumbs = searchTerm == null; // the path stays visible while files are selected
 		if (titleView != null) {
-			titleView.setText(!sel.isEmpty() ? selectedEntries().size() + " selected"
-					: searchTerm != null ? "\uD83D\uDD0D  " + searchTerm : "");
+			titleView.setText(searchTerm != null ? "\uD83D\uDD0D  " + searchTerm : "");
 			titleView.setVisibility(showCrumbs ? View.GONE : View.VISIBLE);
 		}
+		if (filePathScroll != null)
+			filePathScroll.setVisibility(showCrumbs ? View.VISIBLE : View.GONE);
 		if (fileBreadcrumbs != null) {
 			fileBreadcrumbs.setVisibility(showCrumbs ? View.VISIBLE : View.GONE);
 			if (showCrumbs) updateBreadcrumbs();
@@ -1327,11 +1383,11 @@ public class MainActivity extends Activity {
 				else
 					files++;
 			}
-			infoView.setText(dirs + " folders, " + files + " files");
+			infoView.setText(dirs + " folders, " + files + " files" + (sel.isEmpty() ? "" : "  \u00B7  " + selectedEntries().size() + " selected"));
 		}
 		if (quotaTop != null) {
 			quotaTop.setText(quotaText);
-			quotaTop.setVisibility(quotaText.length() > 0 ? View.VISIBLE : View.GONE);
+			quotaTop.setVisibility(quotaText.length() > 0 ? View.VISIBLE : View.INVISIBLE);
 		}
 		if (emptyView != null) {
 			emptyView.setText(searchTerm != null ? "Nothing found." : "This folder is empty.");
@@ -1344,7 +1400,7 @@ public class MainActivity extends Activity {
 	void updateBreadcrumbs() {
 		fileBreadcrumbs.removeAllViews();
 		if (curDir == null || curDir.equals("/")) {
-			TextView slash = mkText("/", 18, TEXT);
+			TextView slash = mkText("/", 17, TEXT);
 			fileBreadcrumbs.addView(slash);
 			return;
 		}
@@ -1356,12 +1412,16 @@ public class MainActivity extends Activity {
 			final String destination = path;
 			TextView segment = mkText("/" + parts[i], 17, TEXT);
 			segment.setSingleLine(true);
-			segment.setPadding(dp(3), dp(12), dp(3), dp(12));
+			segment.setPadding(dp(3), dp(4), dp(3), dp(4));
 			segment.setOnClickListener(new View.OnClickListener() {
 				public void onClick(View v) { if (!curDir.equals(destination)) loadDir(destination, false); }
 			});
 			fileBreadcrumbs.addView(segment);
 		}
+		if (filePathScroll != null)
+			filePathScroll.post(new Runnable() {
+				public void run() { filePathScroll.fullScroll(View.FOCUS_RIGHT); }
+			});
 	}
 
 	static String parentOf(String p) {
@@ -1611,7 +1671,6 @@ public class MainActivity extends Activity {
 		pm.getMenu().add(0, 4, 3, "Copy to...");
 		pm.getMenu().add(0, 5, 4, "Move to...");
 		pm.getMenu().add(0, 6, 5, "Download");
-		pm.getMenu().add(0, 7, 6, "Clear selection");
 		pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
 			public boolean onMenuItemClick(android.view.MenuItem item) {
 				ArrayList<TeraEntry> chosen = selectedEntries();
@@ -1634,9 +1693,6 @@ public class MainActivity extends Activity {
 				case 6:
 					downloadEntries(chosen);
 					break;
-				default:
-					sel.clear();
-					onSelChanged();
 				}
 				return true;
 			}
@@ -1851,7 +1907,6 @@ public class MainActivity extends Activity {
 		if (canPreview(e)) pm.getMenu().add(0, 15, 0, "View");
 		pm.getMenu().add(0, 7, 6, "Download");
 		pm.getMenu().add(0, 8, 7, "Share link");
-		pm.getMenu().add(0, 9, 8, "Details");
 		pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
 			public boolean onMenuItemClick(android.view.MenuItem item) {
 				ArrayList<TeraEntry> one = new ArrayList<TeraEntry>();
@@ -2107,6 +2162,30 @@ public class MainActivity extends Activity {
 				}).setNegativeButton("Cancel", null).show();
 	}
 
+	/** path line of a folder picker: home icon, the path, and the go-to-parent icon right beside it */
+	LinearLayout pickerHeader(TextView pathView, View.OnClickListener homeCb, View.OnClickListener upCb, View[] upOut) {
+		LinearLayout bar = new LinearLayout(this);
+		bar.setOrientation(LinearLayout.HORIZONTAL);
+		bar.setGravity(Gravity.CENTER_VERTICAL);
+		View home = iconButton("home", ACCENT, 12, 4, 15, 30);
+		home.setOnClickListener(homeCb);
+		bar.addView(home);
+		HorizontalScrollView sc = new HorizontalScrollView(this);
+		sc.setHorizontalScrollBarEnabled(false);
+		LinearLayout row = new LinearLayout(this);
+		row.setGravity(Gravity.CENTER_VERTICAL);
+		pathView.setPadding(dp(4), dp(5), dp(4), dp(5));
+		pathView.setSingleLine(true);
+		row.addView(pathView);
+		View up = iconButton("updir", ACCENT, 6, 8, 15, 30);
+		up.setOnClickListener(upCb);
+		row.addView(up);
+		upOut[0] = up;
+		sc.addView(row, new android.widget.FrameLayout.LayoutParams(-2, -1));
+		bar.addView(sc, new LinearLayout.LayoutParams(0, -2, 1));
+		return bar;
+	}
+
 	interface FolderCb {
 		void picked(String dir);
 	}
@@ -2119,14 +2198,36 @@ public class MainActivity extends Activity {
 		LinearLayout box = new LinearLayout(this);
 		box.setOrientation(LinearLayout.VERTICAL);
 		final TextView pathView = mkText("", 13, MUTED);
-		pathView.setPadding(dp(20), dp(8), dp(20), dp(8));
-		box.addView(pathView);
-		ListView lv = new ListView(this);
-		final ArrayAdapter<String> ad = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels);
-		lv.setAdapter(ad);
-		box.addView(lv, new LinearLayout.LayoutParams(-1, dp(300)));
+		final View[] upBtn = new View[1];
 		final Runnable[] loader = new Runnable[1];
 		final String[] target = new String[] { start };
+		box.addView(pickerHeader(pathView, new View.OnClickListener() {
+			public void onClick(View v) {
+				target[0] = "/";
+				loader[0].run();
+			}
+		}, new View.OnClickListener() {
+			public void onClick(View v) {
+				if (!cur[0].equals("/")) {
+					target[0] = parentOf(cur[0]);
+					loader[0].run();
+				}
+			}
+		}, upBtn));
+		ListView lv = new ListView(this);
+		final ArrayAdapter<String> ad = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, labels) {
+			public View getView(int pos, View cv, ViewGroup parent) {
+				TextView tv = (TextView) super.getView(pos, cv, parent);
+				String t = getItem(pos);
+				if (t != null && t.startsWith("\u2B06"))
+					tv.setCompoundDrawables(null, null, null, null);
+				else
+					setIcon(tv, "folder", ACCENT);
+				return tv;
+			}
+		};
+		lv.setAdapter(ad);
+		box.addView(lv, new LinearLayout.LayoutParams(-1, dp(300)));
 		loader[0] = new Runnable() {
 			public void run() {
 				final String dir = target[0];
@@ -2136,8 +2237,6 @@ public class MainActivity extends Activity {
 						try {
 							JSONObject r = client.listAll(dir);
 							final ArrayList<String[]> nr = new ArrayList<String[]>();
-							if (!dir.equals("/"))
-								nr.add(new String[] { "\u2B06  ..", parentOf(dir) });
 							JSONArray a = r.optJSONArray("list");
 							ArrayList<TeraEntry> folders = new ArrayList<TeraEntry>();
 							for (int i = 0; a != null && i < a.length(); i++) {
@@ -2147,7 +2246,7 @@ public class MainActivity extends Activity {
 							}
 							sortList(folders);
 							for (int i = 0; i < folders.size(); i++)
-								nr.add(new String[] { "\uD83D\uDCC1  " + folders.get(i).name, folders.get(i).path });
+								nr.add(new String[] { folders.get(i).name, folders.get(i).path });
 							runOnUiThread(new Runnable() {
 								public void run() {
 									cur[0] = dir;
@@ -2158,6 +2257,7 @@ public class MainActivity extends Activity {
 										labels.add(rows.get(i)[0]);
 									ad.notifyDataSetChanged();
 									pathView.setText(dir);
+									upBtn[0].setVisibility(dir.equals("/") ? View.GONE : View.VISIBLE);
 								}
 							});
 						} catch (final Exception e) {
@@ -2315,8 +2415,9 @@ public class MainActivity extends Activity {
 		header.setBackgroundColor(PANEL);
 		LinearLayout navigation = new LinearLayout(this);
 		navigation.setGravity(Gravity.CENTER_VERTICAL);
-		TextView home = mkText("⌂", 25, TEXT);
-		home.setPadding(dp(14), dp(8), dp(8), dp(10));
+		navigation.setPadding(0, dp(BAR_TOP_DP), 0, 0); // same height as the other title bars
+		navigation.setMinimumHeight(dp(BAR_TOP_DP + BAR_ROW_DP));
+		View home = iconButton("home", ACCENT, 14, 8);
 		home.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) { openSearchFolder("/"); }
 		});
@@ -2333,33 +2434,32 @@ public class MainActivity extends Activity {
 			accumulated += "/" + pieces[i];
 			final String destination = accumulated;
 			TextView crumb = mkText("/" + pieces[i], 17, TEXT);
-			crumb.setPadding(dp(3), dp(8), dp(3), dp(10));
+			crumb.setPadding(dp(3), dp(4), dp(3), dp(4));
 			crumb.setOnClickListener(new View.OnClickListener() {
 				public void onClick(View v) { openSearchFolder(destination); }
 			});
 			pathItems.addView(crumb);
 		}
-		pathScroll.addView(pathItems);
-		navigation.addView(pathScroll, new LinearLayout.LayoutParams(0, -2, 1));
 		if (!scopeDir.equals("/")) {
-			TextView up = mkText("⬆", 21, ACCENT);
-			up.setPadding(dp(10), dp(8), dp(10), dp(10));
+			View up = iconButton("updir", ACCENT, 10, 10);
 			up.setOnClickListener(new View.OnClickListener() {
 				public void onClick(View v) { openSearchFolder(parentOf(scopeDir)); }
 			});
-			navigation.addView(up);
+			pathItems.addView(up); // right beside the path
 		}
+		pathScroll.addView(pathItems);
+		navigation.addView(pathScroll, new LinearLayout.LayoutParams(0, -2, 1));
 		header.addView(navigation);
 		root.addView(header, new LinearLayout.LayoutParams(-1, -2));
 		TextView pageHeading = mkText("⌕  Search files", 20, TEXT);
-		pageHeading.setPadding(dp(18), dp(18), dp(18), dp(12));
+		pageHeading.setPadding(dp(18), dp(10), dp(18), dp(4));
 		pageHeading.setTypeface(Typeface.DEFAULT_BOLD);
 		root.addView(pageHeading);
 
 		ScrollView scroll = new ScrollView(this);
 		LinearLayout content = new LinearLayout(this);
 		content.setOrientation(LinearLayout.VERTICAL);
-		content.setPadding(dp(18), dp(20), dp(18), dp(20));
+		content.setPadding(dp(18), dp(6), dp(18), dp(12));
 		scroll.addView(content);
 		root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -2368,8 +2468,8 @@ public class MainActivity extends Activity {
 		final EditText input = new EditText(this);
 		styleEdit(input, "Enter file or folder name");
 		input.setSingleLine(true);
-		LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(-1, dp(56));
-		ip.topMargin = dp(18);
+		LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(-1, dp(46));
+		ip.topMargin = dp(6);
 		content.addView(input, ip);
 
 		LinearLayout options = new LinearLayout(this);
@@ -2383,25 +2483,25 @@ public class MainActivity extends Activity {
 		options.addView(exact, new LinearLayout.LayoutParams(0, -2, 1));
 		options.addView(caseSensitive, new LinearLayout.LayoutParams(0, -2, 1));
 		LinearLayout.LayoutParams op = new LinearLayout.LayoutParams(-1, -2);
-		op.topMargin = dp(12);
+		op.topMargin = dp(0);
 		content.addView(options, op);
 
 		LinearLayout actions = new LinearLayout(this);
 		actions.setOrientation(LinearLayout.HORIZONTAL);
-		LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(-1, dp(54));
-		ap.topMargin = dp(22);
+		actions.setGravity(Gravity.CENTER_HORIZONTAL);
+		LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(-1, dp(38));
+		ap.topMargin = dp(8);
 		content.addView(actions, ap);
-		Button cancel = mkBtn("✖  Cancel");
-		cancel.setBackgroundColor(BTN);
-		LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, -1, 1);
-		cp.rightMargin = dp(8);
+		Button cancel = mkSmallBtn("✖  Cancel", BTN);
+		LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -1);
+		cp.rightMargin = dp(6);
 		actions.addView(cancel, cp);
 		cancel.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) { showFiles(); }
 		});
-		final Button search = mkBtn("⌕  Search");
-		LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, -1, 1);
-		sp.leftMargin = dp(8);
+		final Button search = mkSmallBtn("⌕  Search", ACCENT);
+		LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -1);
+		sp.leftMargin = dp(6);
 		actions.addView(search, sp);
 		search.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
@@ -2414,12 +2514,12 @@ public class MainActivity extends Activity {
 		searchPageProgress.setIndeterminate(true);
 		searchPageProgress.setVisibility(View.GONE);
 		LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, dp(4));
-		pp.topMargin = dp(12);
+		pp.topMargin = dp(6);
 		content.addView(searchPageProgress, pp);
 		searchResultsContainer = new LinearLayout(this);
 		searchResultsContainer.setOrientation(LinearLayout.VERTICAL);
 		LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
-		rp.topMargin = dp(16);
+		rp.topMargin = dp(6);
 		content.addView(searchResultsContainer, rp);
 		setContentView(root);
 	}
@@ -2496,7 +2596,7 @@ public class MainActivity extends Activity {
 		if (searchResultsContainer == null) return;
 		searchResultsContainer.removeAllViews();
 		TextView title = mkText("Search results (" + results.size() + ")", 16, MUTED);
-		title.setPadding(dp(2), dp(4), dp(2), dp(12));
+		title.setPadding(dp(2), dp(2), dp(2), dp(6));
 		searchResultsContainer.addView(title);
 		if (results.isEmpty()) {
 			searchResultsContainer.addView(mkText("No matching files or folders.", 15, MUTED));
@@ -2506,13 +2606,17 @@ public class MainActivity extends Activity {
 			final TeraEntry e = results.get(i);
 			LinearLayout card = new LinearLayout(this);
 			card.setOrientation(LinearLayout.VERTICAL);
-			card.setPadding(dp(14), dp(12), dp(14), dp(12));
-			card.setBackgroundColor(PANEL);
-			TextView name = mkText((e.isDir ? "📁  " : "▤  ") + e.name + (e.isDir ? "" : "   " + human(e.size)), 17, TEXT);
+			card.setPadding(dp(12), dp(7), dp(12), dp(7));
+			GradientDrawable cardBg = new GradientDrawable();
+			cardBg.setColor(PANEL);
+			cardBg.setCornerRadius(dp(8));
+			card.setBackground(cardBg);
+			TextView name = mkText(e.name + (e.isDir ? "" : "   " + human(e.size)), 17, TEXT);
+			setIcon(name, Icons.forEntry(e), e.isDir ? ACCENT : TEXT);
 			name.setTypeface(Typeface.DEFAULT_BOLD);
 			card.addView(name);
 			TextView location = mkText(parentOf(e.path), 14, MUTED);
-			location.setPadding(dp(26), dp(5), 0, dp(5));
+			location.setPadding(dp(32), dp(1), 0, dp(1));
 			location.setTextColor(ACCENT);
 			location.setOnClickListener(new View.OnClickListener() {
 				public void onClick(View v) { openSearchFolder(parentOf(e.path)); }
@@ -2524,7 +2628,7 @@ public class MainActivity extends Activity {
 				}
 			});
 			LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-			params.bottomMargin = dp(10);
+			params.bottomMargin = dp(4);
 			searchResultsContainer.addView(card, params);
 		}
 	}
@@ -2625,8 +2729,22 @@ public class MainActivity extends Activity {
 		LinearLayout box = new LinearLayout(this);
 		box.setOrientation(LinearLayout.VERTICAL);
 		final TextView pathView = mkText("", 13, MUTED);
-		pathView.setPadding(dp(20), dp(8), dp(20), dp(8));
-		box.addView(pathView);
+		final View[] upBtn = new View[1];
+		final Runnable[] loadRef = new Runnable[1];
+		box.addView(pickerHeader(pathView, new View.OnClickListener() {
+			public void onClick(View v) {
+				cur[0] = top;
+				loadRef[0].run();
+			}
+		}, new View.OnClickListener() {
+			public void onClick(View v) {
+				File par = cur[0].getParentFile();
+				if (par != null && !cur[0].getPath().equals("/storage") && !cur[0].getPath().equals("/")) {
+					cur[0] = par;
+					loadRef[0].run();
+				}
+			}
+		}, upBtn));
 		final CheckBox selAllBox = new CheckBox(this);
 		selAllBox.setText("Select all");
 		selAllBox.setTextColor(TEXT);
@@ -2670,14 +2788,17 @@ public class MainActivity extends Activity {
 				}
 				LinearLayout col = new LinearLayout(MainActivity.this);
 				col.setOrientation(LinearLayout.VERTICAL);
-				String label = r.type == 0 ? "\u2B06  .." : (r.type == 1 ? "\uD83D\uDCC1  " : "\uD83D\uDCC4  ") + r.f.getName();
-				TextView nm = mkText(label, 17, TEXT);
+				TextView nm = mkText(r.type == 0 ? "\u2B06  .." : r.f.getName(), 17, TEXT);
+				if (r.type == 1)
+					setIcon(nm, "folder", ACCENT);
+				else if (r.type == 2)
+					setIcon(nm, "file", TEXT);
 				nm.setSingleLine(true);
 				nm.setEllipsize(TextUtils.TruncateAt.MIDDLE);
 				col.addView(nm);
 				if (r.type == 2) {
 					TextView sz = mkText(human(r.f.length()), 12, MUTED);
-					sz.setPadding(dp(30), 0, 0, 0);
+					sz.setPadding(dp(32), 0, 0, 0);
 					col.addView(sz);
 				}
 				row.addView(col, new LinearLayout.LayoutParams(0, -2, 1));
@@ -2714,12 +2835,8 @@ public class MainActivity extends Activity {
 				rows.clear();
 				File[] ls = dir.listFiles();
 				String parent = dir.getParent();
-				if (parent != null && !dir.getPath().equals("/storage") && !dir.getPath().equals("/")) {
-					LRow up = new LRow();
-					up.f = dir.getParentFile();
-					up.type = 0;
-					rows.add(up);
-				}
+				upBtn[0].setVisibility(parent != null && !dir.getPath().equals("/storage") && !dir.getPath().equals("/")
+						? View.VISIBLE : View.GONE);
 				if (ls == null) {
 					pathView.setText(dir.getPath() + "  (cannot read this folder)");
 				} else {
@@ -2745,6 +2862,7 @@ public class MainActivity extends Activity {
 				updateState.run();
 			}
 		};
+		loadRef[0] = load;
 		lv.setOnItemClickListener(new AdapterView.OnItemClickListener() {
 			public void onItemClick(AdapterView<?> p, View v, int pos, long id) {
 				if (pos < 0 || pos >= rows.size())
@@ -3429,7 +3547,7 @@ public class MainActivity extends Activity {
 
 	TextView settingsHeader(String t) {
 		TextView h = mkText(t, 13, MUTED);
-		h.setPadding(dp(20), dp(24), dp(20), dp(6));
+		h.setPadding(dp(20), dp(14), dp(20), dp(2));
 		return h;
 	}
 
@@ -3438,7 +3556,7 @@ public class MainActivity extends Activity {
 		LinearLayout row = new LinearLayout(this);
 		row.setOrientation(LinearLayout.HORIZONTAL);
 		row.setGravity(Gravity.CENTER_VERTICAL);
-		row.setPadding(dp(20), dp(12), dp(20), dp(12));
+		row.setPadding(dp(20), dp(5), dp(20), dp(5));
 		android.util.TypedValue tv = new android.util.TypedValue();
 		if (getTheme().resolveAttribute(android.R.attr.selectableItemBackground, tv, true))
 			row.setBackgroundResource(tv.resourceId);
@@ -3447,7 +3565,7 @@ public class MainActivity extends Activity {
 		left.addView(mkText(title, 17, TEXT));
 		if (sub != null && sub.length() > 0) {
 			TextView st = mkText(sub, 14, MUTED);
-			st.setPadding(0, dp(2), 0, 0);
+			st.setPadding(0, dp(1), 0, 0);
 			left.addView(st);
 		}
 		row.addView(left, new LinearLayout.LayoutParams(0, -2, 1));
@@ -3458,7 +3576,7 @@ public class MainActivity extends Activity {
 	}
 
 	View checkMark(boolean on) {
-		TextView c = mkText("\u2713", 24, 0xFF2D6AA0);
+		TextView c = mkText("\u2713", 20, 0xFF2D6AA0);
 		c.setTypeface(null, android.graphics.Typeface.BOLD);
 		c.setVisibility(on ? View.VISIBLE : View.INVISIBLE);
 		return c;
@@ -3478,29 +3596,13 @@ public class MainActivity extends Activity {
 		root.setOrientation(LinearLayout.VERTICAL);
 		root.setBackgroundColor(BG);
 
-		LinearLayout bar = new LinearLayout(this);
-		bar.setOrientation(LinearLayout.HORIZONTAL);
-		bar.setGravity(Gravity.CENTER_VERTICAL);
-		bar.setBackgroundColor(Color.rgb(45, 105, 160));
-		TextView back = new TextView(this);
-		back.setText("\u2190");
-		back.setTextColor(Color.WHITE);
-		back.setTextSize(22);
-		back.setGravity(Gravity.CENTER);
-		back.setPadding(dp(16), 0, dp(16), 0);
-		back.setOnClickListener(new View.OnClickListener() {
+		TextView[] settingsTitle = new TextView[1];
+		root.addView(makeTopBar("\u2190", settingsTitle, new View.OnClickListener() {
 			public void onClick(View v) {
 				showFiles();
 			}
-		});
-		bar.addView(back, new LinearLayout.LayoutParams(-2, -1));
-		TextView title = new TextView(this);
-		title.setText("Settings");
-		title.setTextColor(Color.WHITE);
-		title.setTextSize(22);
-		title.setGravity(Gravity.CENTER_VERTICAL);
-		bar.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
-		root.addView(bar, new LinearLayout.LayoutParams(-1, dp(56)));
+		}, null, null, null), new LinearLayout.LayoutParams(-1, -2));
+		settingsTitle[0].setText("Settings");
 
 		ScrollView sv = new ScrollView(this);
 		LinearLayout box = new LinearLayout(this);
@@ -3603,7 +3705,6 @@ public class MainActivity extends Activity {
 				if (any) {
 					pm.getMenu().add(0, 1, 0, "Restore");
 					pm.getMenu().add(0, 2, 1, "Delete forever");
-					pm.getMenu().add(0, 3, 2, "Clear selection");
 				}
 				pm.getMenu().add(0, 4, 3, "Empty trash");
 				pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
@@ -3614,10 +3715,6 @@ public class MainActivity extends Activity {
 							break;
 						case 2:
 							confirmTrashDelete();
-							break;
-						case 3:
-							tsel.clear();
-							onTrashSel();
 							break;
 						default:
 							confirmEmptyTrash();
@@ -3633,7 +3730,7 @@ public class MainActivity extends Activity {
 		trashLoad.setIndeterminate(true);
 		trashLoad.setVisibility(View.INVISIBLE);
 		root.addView(trashLoad, new LinearLayout.LayoutParams(-1, dp(3)));
-		trashInfo = mkText("Deleted files stay here until you empty the trash.", 12, MUTED);
+		trashInfo = mkText("0 selected", 12, MUTED);
 		trashInfo.setPadding(dp(16), dp(6), dp(16), dp(4));
 		root.addView(trashInfo);
 		RowHost host = new RowHost() {
@@ -3671,16 +3768,12 @@ public class MainActivity extends Activity {
 		lv.setAdapter(trashAdapter);
 		lv.setOnItemClickListener(new AdapterView.OnItemClickListener() {
 			public void onItemClick(AdapterView<?> p, View v, int pos, long id) {
+				// folders no longer open: a tap selects, like a file
 				TeraEntry e = trashEntries.get(pos);
-				if (e.isDir) {
-					trashStack.add(new String[] { trashDir, trashFid });
-					loadTrash(e.path, e.fsId);
-				} else {
-					String k = e.fsId.length() > 0 ? e.fsId : e.path;
-					if (!tsel.remove(k))
-						tsel.add(k);
-					onTrashSel();
-				}
+				String k = e.fsId.length() > 0 ? e.fsId : e.path;
+				if (!tsel.remove(k))
+					tsel.add(k);
+				onTrashSel();
 			}
 		});
 		root.addView(lv, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -3696,8 +3789,7 @@ public class MainActivity extends Activity {
 	void onTrashSel() {
 		if (trashAdapter == null || screen != SCREEN_TRASH)
 			return;
-		trashTitle.setText(!selectedTrash().isEmpty() ? selectedTrash().size() + " selected"
-				: trashDir.length() == 0 ? "Trash" : "Trash  " + trashDir);
+		trashInfo.setText(selectedTrash().size() + " selected");
 		trashAdapter.notifyDataSetChanged();
 	}
 
@@ -3731,6 +3823,7 @@ public class MainActivity extends Activity {
 		if (c == null)
 			return;
 		tsel.clear();
+		trashInfo.setText("0 selected");
 		trashLoad.setVisibility(View.VISIBLE);
 		trashTitle.setText(dir.length() == 0 ? "Trash" : "Trash  " + dir);
 		exec.execute(new Runnable() {
@@ -3927,7 +4020,8 @@ public class MainActivity extends Activity {
 			TextView[] h = (TextView[]) col.getTag();
 			TeraShares.Share s = shares.get(pos);
 			boolean dead = s.state.equals("cancelled");
-			h[0].setText((s.isDir ? "\uD83D\uDCC1  " : "\uD83D\uDCC4  ") + s.name);
+			h[0].setText(s.name);
+			setIcon(h[0], s.isDir ? "folder" : "file", s.isDir ? ACCENT : TEXT);
 			h[0].setTextColor(dead ? MUTED : TEXT);
 			h[1].setText((dead ? "Inactive (stopped or expired)   " : s.state.equals("active") ? "Active   " : "Status unknown   ") + s.url);
 			h[1].setTextColor(dead ? ERR : s.state.equals("active") ? OK : MUTED);
