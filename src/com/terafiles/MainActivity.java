@@ -1979,8 +1979,7 @@ public class MainActivity extends Activity {
             public void run() {
                 String error = null;
                 try {
-                    String link = c.getDownloadLink(e.path, e.fsId);
-                    c.downloadTo(link, local, e.size, st);
+                    c.downloadEntry(e.path, e.fsId, local, e.size, st);
                 } catch (Exception ex) {
                     error = ex.getMessage() == null ? ex.toString() : ex.getMessage();
                     local.delete();
@@ -2025,8 +2024,7 @@ public class MainActivity extends Activity {
 						new FileOutputStream(local).close();
 						text = "";
 					} else {
-						String link = c.getDownloadLink(e.path, e.fsId);
-						c.downloadTo(link, local, e.size, st);
+						c.downloadEntry(e.path, e.fsId, local, e.size, st);
 						byte[] b = new byte[(int) local.length()];
 						FileInputStream in = new FileInputStream(local);
 						try {
