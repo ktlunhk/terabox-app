@@ -390,11 +390,11 @@ class TextEditor {
 			public void run() {
 				SpannableStringBuilder styled = null;
 				try {
-					styled = EditorHighlighter.styled(text, entry.name, true);
+					styled = EditorHighlighter.styled(text, entry.name, MainActivity.darkMode);
 					if (styled == null) {
 						String n = entry.name;
 						int dot = n.lastIndexOf('.');
-						styled = new SyntaxHighlighter(true).highlight(text, dot >= 0 ? n.substring(dot + 1) : "");
+						styled = new SyntaxHighlighter(MainActivity.darkMode).highlight(text, dot >= 0 ? n.substring(dot + 1) : "");
 					}
 				} catch (Throwable t) {
 					styled = null; // colours are cosmetic
@@ -477,7 +477,7 @@ class TextEditor {
 						} else if (ferr.equals("Cancelled")) {
 							a.toast("Save cancelled");
 						} else {
-							new AlertDialog.Builder(a).setTitle("Save failed").setMessage(ferr)
+							new DragBuilder(a).setTitle("Save failed").setMessage(ferr)
 									.setPositiveButton("OK", null).show();
 						}
 					}
@@ -496,7 +496,7 @@ class TextEditor {
 			exit();
 			return;
 		}
-		new AlertDialog.Builder(a).setTitle("Unsaved changes").setMessage("Save changes to " + entry.name + "?")
+		new DragBuilder(a).setTitle("Unsaved changes").setMessage("Save changes to " + entry.name + "?")
 				.setPositiveButton("Save", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						save(new Runnable() {
@@ -532,7 +532,7 @@ class TextEditor {
 		input.setInputType(InputType.TYPE_CLASS_NUMBER);
 		input.setTextColor(MainActivity.TEXT);
 		input.setHintTextColor(MainActivity.MUTED);
-		new AlertDialog.Builder(a).setTitle("Go to line").setView(input)
+		new DragBuilder(a).setTitle("Go to line").setView(input)
 				.setPositiveButton("Go", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						try {
