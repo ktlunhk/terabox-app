@@ -129,10 +129,14 @@ class TextEditor {
 	}
 
 	TextView toolBtn(String label) {
+		return toolBtn(label, MainActivity.TEXT);
+	}
+
+	TextView toolBtn(String label, int color) {
 		TextView b = new TextView(a);
 		b.setText(label);
 		b.setTextSize(13);
-		b.setTextColor(MainActivity.TEXT);
+		b.setTextColor(color);
 		b.setGravity(Gravity.CENTER);
 		b.setSingleLine(true);
 		b.setPadding(a.dp(14), 0, a.dp(14), 0);
@@ -192,10 +196,11 @@ class TextEditor {
 		LinearLayout bar = new LinearLayout(a);
 		bar.setOrientation(LinearLayout.HORIZONTAL);
 		bar.setGravity(Gravity.CENTER_VERTICAL);
-		bar.setBackgroundColor(Color.rgb(45, 105, 160));
+		bar.setBackgroundColor(MainActivity.PANEL); // same as the file list header
+		bar.setPadding(0, a.dp(MainActivity.BAR_TOP_DP), 0, 0);
 		TextView back = new TextView(a);
 		back.setText("\u2190");
-		back.setTextColor(Color.WHITE);
+		back.setTextColor(MainActivity.TEXT);
 		back.setTextSize(20);
 		back.setGravity(Gravity.CENTER);
 		back.setPadding(a.dp(16), 0, a.dp(16), 0);
@@ -208,36 +213,31 @@ class TextEditor {
 		TextView titleTv = new TextView(a);
 		titleTv.setText(entry.name);
 		titleTv.setTextSize(16);
-		titleTv.setTextColor(Color.WHITE);
+		titleTv.setTextColor(MainActivity.TEXT);
 		titleTv.setSingleLine(true);
 		titleTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
 		titleTv.setGravity(Gravity.CENTER_VERTICAL);
 		bar.addView(titleTv, new LinearLayout.LayoutParams(0, -1, 1));
-		saveBtn = new TextView(a);
-		saveBtn.setText("Save");
-		saveBtn.setTextColor(Color.WHITE);
-		saveBtn.setTextSize(15);
-		saveBtn.setGravity(Gravity.CENTER);
-		saveBtn.setPadding(a.dp(18), 0, a.dp(18), 0);
+
+		// ---- tool row ----
+		LinearLayout tools = new LinearLayout(a);
+		tools.setOrientation(LinearLayout.HORIZONTAL);
+		wrapBtn = toolBtn("No wrap", Color.WHITE);
+		TextView searchBtn = toolBtn("Search", Color.WHITE);
+		TextView goBtn = toolBtn("Go", Color.WHITE);
+		TextView copyBtn = toolBtn("Copy", Color.WHITE);
+		TextView pasteBtn = toolBtn("Paste", Color.WHITE);
+		undoBtn = toolBtn("Undo", Color.WHITE);
+		redoBtn = toolBtn("Redo", Color.WHITE);
+		saveBtn = toolBtn("Save", Color.WHITE);
+		saveBtn.setTypeface(Typeface.DEFAULT_BOLD);
 		saveBtn.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
 				save(null);
 			}
 		});
-		bar.addView(saveBtn, new LinearLayout.LayoutParams(-2, -1));
-
-		// ---- tool row ----
-		LinearLayout tools = new LinearLayout(a);
-		tools.setOrientation(LinearLayout.HORIZONTAL);
-		wrapBtn = toolBtn("No wrap");
-		TextView searchBtn = toolBtn("Search");
-		TextView goBtn = toolBtn("Go");
-		TextView copyBtn = toolBtn("Copy");
-		TextView pasteBtn = toolBtn("Paste");
-		undoBtn = toolBtn("Undo");
-		redoBtn = toolBtn("Redo");
-		tools.addView(undoBtn, new LinearLayout.LayoutParams(-2, -1));
-		tools.addView(redoBtn, new LinearLayout.LayoutParams(-2, -1));
+		tools.addView(undoBtn, new LinearLayout.LayoutParams(0, -1, 1f));
+		tools.addView(redoBtn, new LinearLayout.LayoutParams(0, -1, 1f));
 		undoBtn.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) { applyHistory(true); }
 		});
@@ -245,16 +245,20 @@ class TextEditor {
 			public void onClick(View v) { applyHistory(false); }
 		});
 		refreshHistoryButtons();
-		tools.addView(wrapBtn, new LinearLayout.LayoutParams(-2, -1));
-		tools.addView(searchBtn, new LinearLayout.LayoutParams(-2, -1));
-		tools.addView(goBtn, new LinearLayout.LayoutParams(-2, -1));
-		tools.addView(copyBtn, new LinearLayout.LayoutParams(-2, -1));
-		tools.addView(pasteBtn, new LinearLayout.LayoutParams(-2, -1));
-		HorizontalScrollView toolsScroll = new HorizontalScrollView(a);
-		toolsScroll.setFillViewport(true);
-		toolsScroll.setBackgroundColor(MainActivity.PANEL);
-		toolsScroll.setHorizontalScrollBarEnabled(false);
-		toolsScroll.addView(tools, new HorizontalScrollView.LayoutParams(-2, -1));
+		// one row that fits the screen (no sideways scrolling): equal-width cells, small padding, Save last
+		tools.addView(wrapBtn, new LinearLayout.LayoutParams(0, -1, 1.4f));
+		tools.addView(searchBtn, new LinearLayout.LayoutParams(0, -1, 1.2f));
+		tools.addView(goBtn, new LinearLayout.LayoutParams(0, -1, 0.8f));
+		tools.addView(copyBtn, new LinearLayout.LayoutParams(0, -1, 1f));
+		tools.addView(pasteBtn, new LinearLayout.LayoutParams(0, -1, 1f));
+		tools.addView(saveBtn, new LinearLayout.LayoutParams(0, -1, 1.2f));
+		TextView[] cells = { undoBtn, redoBtn, wrapBtn, searchBtn, goBtn, copyBtn, pasteBtn, saveBtn };
+		for (int i = 0; i < cells.length; i++) {
+			cells[i].setTextSize(12);
+			cells[i].setPadding(a.dp(2), 0, a.dp(2), 0);
+		}
+		LinearLayout toolsScroll = tools;
+		toolsScroll.setBackgroundColor(Color.rgb(45, 105, 160));
 
 		wrapBtn.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
@@ -347,7 +351,7 @@ class TextEditor {
 		LinearLayout screen = new LinearLayout(a);
 		screen.setOrientation(LinearLayout.VERTICAL);
 		screen.setBackgroundColor(MainActivity.BG);
-		screen.addView(bar, new LinearLayout.LayoutParams(-1, a.dp(52)));
+		screen.addView(bar, new LinearLayout.LayoutParams(-1, a.dp(MainActivity.BAR_TOP_DP + MainActivity.BAR_ROW_DP))); // same height as the other title bars
 		screen.addView(toolsScroll, new LinearLayout.LayoutParams(-1, a.dp(40)));
 		screen.addView(searchBar, new LinearLayout.LayoutParams(-1, -2));
 		screen.addView(zoomWrap, new LinearLayout.LayoutParams(-1, 0, 1));
