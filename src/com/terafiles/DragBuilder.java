@@ -1,6 +1,11 @@
 package com.terafiles;
 
 import android.app.AlertDialog;
+import android.graphics.drawable.Drawable;
+import android.graphics.Color;
+import android.content.res.TypedArray;
+import android.text.SpannableString;
+import android.text.style.ImageSpan;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -18,6 +23,22 @@ class DragBuilder extends AlertDialog.Builder {
 
 	DragBuilder(Context c) {
 		super(c);
+	}
+
+	@Override public DragBuilder setTitle(CharSequence title) {
+		String name = title == null ? "" : title.toString();
+		String glyph = Icons.forTitle(name);
+		if (glyph == null) { super.setTitle(title); return this; }
+		TypedArray a = getContext().obtainStyledAttributes(new int[]{android.R.attr.textColorPrimary});
+		int color;
+		try { color = a.getColor(0, Color.WHITE); } finally { a.recycle(); }
+		int size = (int)(20 * getContext().getResources().getDisplayMetrics().scaledDensity + .5f);
+		Drawable icon = Icons.get(glyph, color);
+		icon.setBounds(0, 0, size, size);
+		SpannableString styled = new SpannableString("  " + name);
+		styled.setSpan(new ImageSpan(icon, ImageSpan.ALIGN_BOTTOM), 0, 1, 0);
+		super.setTitle(styled);
+		return this;
 	}
 
 	/** the caller sizes and positions the window itself (list popup menus) */
