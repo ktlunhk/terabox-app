@@ -91,7 +91,7 @@ public class PreviewTextView extends EditText {
 	/** Turns the green block bar (and for HTML/XML the tag pair box) on; tagMode = HTML/XML. */
 	public void configureGuides(boolean tagMode, boolean dark, int defaultIndent) {
 		darkTheme = dark;
-		lineBgPaint.setColor(dark ? 0xFF2A2A3A : 0xFFFFF8E1);
+		lineBgPaint.setColor(MainActivity.darkMode ? 0xFF2A2A3A : 0xFFDDDFE3); // light grey on the light theme
 		guides.configure(true, tagMode, dark, defaultIndent);
 		invalidate();
 	}
