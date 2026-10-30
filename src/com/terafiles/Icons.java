@@ -59,7 +59,7 @@ class Icons {
 			return "link";
 		if (s.equals("details"))
 			return "info";
-		if (s.equals("create") || s.equals("new item") || s.startsWith("new "))
+		if (s.equals("create") || s.startsWith("create in ") || s.equals("new item") || s.startsWith("new "))
 			return "plus";
 		if (s.startsWith("upload"))
 			return "upload";
