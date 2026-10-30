@@ -691,6 +691,11 @@ public class TeraClient {
 					len = Long.parseLong(c.getHeaderField("Content-Length"));
 				} catch (Exception e) {
 				}
+				String contentType = c.getContentType();
+				if (contentType != null && (contentType.toLowerCase(java.util.Locale.US).contains("text/html") ||
+					contentType.toLowerCase(java.util.Locale.US).contains("application/json"))) {
+					throw new IOException("Download server returned " + contentType + " instead of file data (HTTP " + status + ").");
+				}
 				long total = len > 0 ? len + have : expectedSize;
 				InputStream in = c.getInputStream();
 				FileOutputStream out = new FileOutputStream(dest, partial);
@@ -723,6 +728,29 @@ public class TeraClient {
 			}
 		}
 		throw new IOException("Too many redirects.");
+	}
+
+
+	/** Fetch with a fresh download URL after a truncated or expired response.
+	 * Never expose an incomplete file to the editor or previewer. */
+	public void downloadEntry(String path, String fsId, File dest, long expectedSize, Progress pg) throws Exception {
+		IOException last = null;
+		for (int attempt = 0; attempt < 3; attempt++) {
+			if (pg != null && pg.cancelled()) throw new IOException("Cancelled");
+			if (attempt > 0 && dest.exists()) dest.delete();
+			try {
+				String link = getDownloadLink(path, fsId);
+				downloadTo(link, dest, expectedSize, pg);
+				return;
+			} catch (IOException ex) {
+				last = ex;
+				String msg = ex.getMessage() == null ? "" : ex.getMessage();
+				if ("Cancelled".equals(msg) || msg.startsWith("Refusing a non-HTTPS")) throw ex;
+				if (dest.exists()) dest.delete();
+			}
+		}
+		throw new IOException("Unable to download the complete file after 3 attempts. " +
+			(last == null ? "" : last.getMessage()));
 	}
 
 	// ================================================================== file operations (stage 2 / 3)
