@@ -2327,6 +2327,26 @@ public class MainActivity extends Activity {
 				});
 	}
 
+	/** fs_id -> name of everything at the top level of the trash, or null when it cannot be read */
+	java.util.HashMap<String, String> trashNames(TeraClient c) {
+		try {
+			JSONObject j = c.recycleList("");
+			if (TeraClient.errnoOf(j) != 0)
+				return null;
+			JSONArray a = TeraClient.recycleItems(j);
+			java.util.HashMap<String, String> out = new java.util.HashMap<String, String>();
+			for (int i = 0; i < a.length(); i++) {
+				JSONObject o = a.getJSONObject(i);
+				TeraEntry t = TeraEntry.from(o);
+				if (t.fsId.length() > 0)
+					out.put(t.fsId, t.name);
+			}
+			return out;
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
 	void doCopyMove(final ArrayList<TeraEntry> todo, final String dest, final boolean move, final String ondup) {
 		conflictAction = new Runnable() {
 			public void run() {
@@ -2358,6 +2378,59 @@ public class MainActivity extends Activity {
 				JSONObject j = c.fileManager(move ? "move" : "copy", l, ondup);
 				if (ondup.length() == 0 && TeraClient.errnoOf(j) != 0 && TeraClient.hasConflict(j))
 					return "CONFLICT";
+				if (ondup.equals("overwrite") && TeraClient.errnoOf(j) != 0 && TeraClient.errnoOf(j) != -6
+						&& (TeraClient.hasConflict(j) || TeraClient.fmDetails(j).contains("already exists"))) {
+					// The server does not apply "overwrite" itself, so replace manually: the items with the same
+					// name in the destination are deleted first (they go to the trash), then the copy / move is retried.
+					java.util.HashSet<String> names = new java.util.HashSet<String>();
+					java.util.HashSet<String> sources = new java.util.HashSet<String>();
+					for (int i = 0; i < l.length(); i++) {
+						names.add(l.getJSONObject(i).getString("newname"));
+						sources.add(l.getJSONObject(i).getString("path"));
+					}
+					JSONObject ls = c.listAll(dest);
+					if (TeraClient.errnoOf(ls) != 0)
+						return chk(ls, "Overwrite");
+					JSONArray items = ls.optJSONArray("list");
+					JSONArray objs = new JSONArray(), plain = new JSONArray();
+					for (int i = 0; items != null && i < items.length(); i++) {
+						TeraEntry old = TeraEntry.from(items.getJSONObject(i));
+						if (old == null || !names.contains(old.name) || sources.contains(old.path) || old.path.equals("/"))
+							continue; // never delete the item that is being moved itself
+						objs.put(new JSONObject().put("path", old.path));
+						plain.put(old.path);
+					}
+					if (objs.length() > 0) {
+						java.util.HashMap<String, String> trashBefore = trashNames(c);
+						JSONObject d = null;
+						try {
+							d = c.fileManager("delete", objs);
+						} catch (Exception ex) {
+							d = null;
+						}
+						if (d == null || (TeraClient.errnoOf(d) != 0 && TeraClient.errnoOf(d) != -6))
+							d = c.fileManager("delete", plain);
+						String delErr = chk(d, "Overwrite (removing the old item)");
+						if (delErr != null)
+							return delErr;
+						// the replaced items must not stay in the trash: delete the ones that just arrived there for good
+						java.util.HashMap<String, String> trashAfter = trashNames(c);
+						if (trashBefore != null && trashAfter != null) {
+							java.util.ArrayList<String> purge = new java.util.ArrayList<String>();
+							for (java.util.Map.Entry<String, String> te : trashAfter.entrySet())
+								if (!trashBefore.containsKey(te.getKey()) && names.contains(te.getValue()))
+									purge.add(te.getKey());
+							if (!purge.isEmpty()) {
+								try {
+									c.recycleAction("delete", purge);
+								} catch (Exception ex) {
+									// the old item then simply stays in the trash
+								}
+							}
+						}
+					}
+					j = c.fileManager(move ? "move" : "copy", l, "");
+				}
 				return chk(j, move ? "Move" : "Copy");
 			}
 		}, afterFilesChange);
@@ -3081,6 +3154,19 @@ public class MainActivity extends Activity {
 	}
 
 	void uploadFolderTree(final Uri tree, final String destination) {
+		ArrayList<String> names = new ArrayList<String>();
+		try {
+			names.add(documentName(DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))));
+		} catch (Exception e) {
+		}
+		checkUploadDup(destination, names, true, new DupAsk() {
+			public void go(DupPlan plan) {
+				uploadFolderTreeRun(tree, destination, plan);
+			}
+		});
+	}
+
+	void uploadFolderTreeRun(final Uri tree, final String destination, final DupPlan plan) {
 		final TeraClient c = client;
 		if (c == null) return;
 		final JobStatus st = new JobStatus("Uploading folder", true);
@@ -3093,18 +3179,18 @@ public class MainActivity extends Activity {
 				String error = null;
 				File temp = new File(getCacheDir(), "folder-upload-" + System.nanoTime());
 				try {
-					String rootName = documentName(DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree)));
+					String rootName = chooseRoot(c, destination, documentName(DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))), plan);
 					ArrayList<FolderItem> items = new ArrayList<FolderItem>();
 					st.message("Scanning " + rootName);
 					scanFolder(tree, DocumentsContract.getTreeDocumentId(tree), "", items, st);
 					String rootPath = (destination.equals("/") ? "" : destination) + "/" + rootName;
-					ensureRemoteFolder(c, rootPath);
+					ensureRemoteFolder(c, rootPath, plan);
 					int total = 0;
 					for (FolderItem it : items) if (!it.directory) total++;
 					for (FolderItem it : items) {
 						if (st.cancelled()) throw new Exception("Cancelled");
 						String remote = rootPath + it.path;
-						if (it.directory) { ensureRemoteFolder(c, remote); continue; }
+						if (it.directory) { ensureRemoteFolder(c, remote, plan); continue; }
 						int slash = remote.lastIndexOf('/');
 						String parent = remote.substring(0, slash);
 						String filename = remote.substring(slash + 1);
@@ -3120,7 +3206,7 @@ public class MainActivity extends Activity {
 							}
 						} finally { out.close(); in.close(); }
 						st.message("(" + (uploaded + 1) + "/" + total + ") " + it.path);
-						c.uploadFile(temp, parent, filename, st);
+						c.uploadFile(temp, parent, resolveName(c, parent, filename, plan), st);
 						temp.delete(); uploaded++;
 					}
 				} catch (Exception e) { error = e.getMessage() == null ? e.toString() : e.getMessage(); }
@@ -3133,7 +3219,7 @@ public class MainActivity extends Activity {
 					if (result == null) toast(count + " file(s) uploaded");
 					else if ("Cancelled".equals(result)) toast("Folder upload cancelled (" + count + " done)");
 					else showErrorResume("Folder upload stopped after " + count + " file(s):\n" + result,
-						new Runnable() { public void run() { uploadFolderTree(tree, destination); } });
+						new Runnable() { public void run() { uploadFolderTreeRun(tree, destination, plan); } });
 				} });
 			}
 		});
@@ -3141,6 +3227,17 @@ public class MainActivity extends Activity {
 
 	/** upload files chosen in the in-app picker (read straight from the phone, no copy first) */
 	void uploadLocalFiles(final ArrayList<File> files, final String dir) {
+		ArrayList<String> names = new ArrayList<String>();
+		for (int i = 0; i < files.size(); i++)
+			names.add(files.get(i).getName());
+		checkUploadDup(dir, names, false, new DupAsk() {
+			public void go(DupPlan plan) {
+				uploadLocalFilesRun(files, dir, plan);
+			}
+		});
+	}
+
+	void uploadLocalFilesRun(final ArrayList<File> files, final String dir, final DupPlan plan) {
 		final TeraClient c = client;
 		if (c == null || files.isEmpty())
 			return;
@@ -3155,7 +3252,7 @@ public class MainActivity extends Activity {
 							throw new Exception("Cancelled");
 						File f = files.get(i);
 						st.message("(" + (i + 1) + "/" + files.size() + ")  " + f.getName());
-						c.uploadFile(f, dir, f.getName(), st);
+						c.uploadFile(f, dir, resolveName(c, dir, f.getName(), plan), st);
 						ok++;
 					}
 				} catch (Exception e) {
@@ -3175,7 +3272,7 @@ public class MainActivity extends Activity {
 						else
 							showErrorResume("Upload stopped after " + fok + " file(s):\n" + ferr, new Runnable() {
 								public void run() {
-									uploadLocalFiles(new ArrayList<File>(files.subList(fok, files.size())), dir);
+									uploadLocalFilesRun(new ArrayList<File>(files.subList(fok, files.size())), dir, plan);
 								}
 							});
 					}
@@ -3208,6 +3305,16 @@ public class MainActivity extends Activity {
 
 	/** upload a whole folder chosen in the in-app picker, keeping its sub-folders */
 	void uploadLocalFolder(final File root, final String destination) {
+		ArrayList<String> names = new ArrayList<String>();
+		names.add(safeFolderName(root.getName()));
+		checkUploadDup(destination, names, true, new DupAsk() {
+			public void go(DupPlan plan) {
+				uploadLocalFolderRun(root, destination, plan);
+			}
+		});
+	}
+
+	void uploadLocalFolderRun(final File root, final String destination, final DupPlan plan) {
 		final TeraClient c = client;
 		if (c == null)
 			return;
@@ -3217,12 +3324,12 @@ public class MainActivity extends Activity {
 				int uploaded = 0;
 				String error = null;
 				try {
-					String rootName = safeFolderName(root.getName());
+					String rootName = chooseRoot(c, destination, safeFolderName(root.getName()), plan);
 					ArrayList<Object[]> items = new ArrayList<Object[]>();
 					st.message("Scanning " + rootName);
 					scanLocal(root, "", items, st);
 					String rootPath = (destination.equals("/") ? "" : destination) + "/" + rootName;
-					ensureRemoteFolder(c, rootPath);
+					ensureRemoteFolder(c, rootPath, plan);
 					int total = 0;
 					for (Object[] it : items)
 						if (!((Boolean) it[2]).booleanValue())
@@ -3234,14 +3341,14 @@ public class MainActivity extends Activity {
 						String rel = (String) it[1];
 						String remote = rootPath + rel;
 						if (((Boolean) it[2]).booleanValue()) {
-							ensureRemoteFolder(c, remote);
+							ensureRemoteFolder(c, remote, plan);
 							continue;
 						}
 						int slash = remote.lastIndexOf('/');
 						String parent = remote.substring(0, slash);
 						String filename = remote.substring(slash + 1);
 						st.message("(" + (uploaded + 1) + "/" + total + ") " + rel);
-						c.uploadFile(f, parent, filename, st);
+						c.uploadFile(f, parent, resolveName(c, parent, filename, plan), st);
 						uploaded++;
 					}
 				} catch (Exception e) {
@@ -3261,7 +3368,7 @@ public class MainActivity extends Activity {
 						else
 							showErrorResume("Folder upload stopped after " + count + " file(s):\n" + result, new Runnable() {
 								public void run() {
-									uploadLocalFolder(root, destination);
+									uploadLocalFolderRun(root, destination, plan);
 								}
 							});
 					}
@@ -3270,10 +3377,220 @@ public class MainActivity extends Activity {
 		});
 	}
 
-	void ensureRemoteFolder(TeraClient c, String path) throws Exception {
+	// ---- duplicate handling for uploads (same choices as copy / move: Overwrite, Keep both, Cancel)
+
+	static class DupPlan {
+		String mode = ""; // "overwrite" or "newcopy"
+		boolean active; // names are checked against the destination (not needed when everything goes into a new folder)
+		String rootName; // folder uploads: the name the folder gets at the destination
+		final java.util.HashMap<String, java.util.HashMap<String, TeraEntry>> dirs = new java.util.HashMap<String, java.util.HashMap<String, TeraEntry>>();
+	}
+
+	interface DupAsk {
+		void go(DupPlan plan);
+	}
+
+	/** names (-> entries) that exist in a remote folder; read once per folder */
+	java.util.HashMap<String, TeraEntry> remoteNames(TeraClient c, DupPlan p, String dir) {
+		java.util.HashMap<String, TeraEntry> m = p.dirs.get(dir);
+		if (m != null)
+			return m;
+		m = new java.util.HashMap<String, TeraEntry>();
+		try {
+			JSONObject j = c.listAll(dir);
+			if (TeraClient.errnoOf(j) == 0) {
+				JSONArray a = j.optJSONArray("list");
+				for (int i = 0; a != null && i < a.length(); i++) {
+					TeraEntry t = TeraEntry.from(a.getJSONObject(i));
+					m.put(t.name, t);
+				}
+			}
+		} catch (Exception e) {
+			// an unreadable or missing folder counts as empty
+		}
+		p.dirs.put(dir, m);
+		return m;
+	}
+
+	/** "name.ext" -> "name(1).ext", "name(2).ext" ... the first one that is free */
+	static String uniqueName(String name, java.util.Set<String> taken) {
+		if (!taken.contains(name))
+			return name;
+		int dot = name.lastIndexOf('.');
+		String stem = dot <= 0 ? name : name.substring(0, dot);
+		String ext = dot <= 0 ? "" : name.substring(dot);
+		for (int i = 1; i < 10000; i++) {
+			String n = stem + "(" + i + ")" + ext;
+			if (!taken.contains(n))
+				return n;
+		}
+		return name;
+	}
+
+	/** Deletes remote items that are being replaced, and removes them from the trash as well. Returns an error text or null. */
+	String deleteReplaced(TeraClient c, ArrayList<String> paths, java.util.Set<String> names) throws Exception {
+		JSONArray objs = new JSONArray(), plain = new JSONArray();
+		for (int i = 0; i < paths.size(); i++) {
+			if (paths.get(i).equals("/"))
+				continue;
+			objs.put(new JSONObject().put("path", paths.get(i)));
+			plain.put(paths.get(i));
+		}
+		if (objs.length() == 0)
+			return null;
+		java.util.HashMap<String, String> trashBefore = trashNames(c);
+		JSONObject d = null;
+		try {
+			d = c.fileManager("delete", objs);
+		} catch (Exception ex) {
+			d = null;
+		}
+		if (d == null || (TeraClient.errnoOf(d) != 0 && TeraClient.errnoOf(d) != -6))
+			d = c.fileManager("delete", plain);
+		String err = chk(d, "Overwrite (removing the old item)");
+		if (err != null)
+			return err;
+		java.util.HashMap<String, String> trashAfter = trashNames(c);
+		if (trashBefore != null && trashAfter != null) {
+			ArrayList<String> purge = new ArrayList<String>();
+			for (java.util.Map.Entry<String, String> te : trashAfter.entrySet())
+				if (!trashBefore.containsKey(te.getKey()) && names.contains(te.getValue()))
+					purge.add(te.getKey());
+			if (!purge.isEmpty()) {
+				try {
+					c.recycleAction("delete", purge);
+				} catch (Exception ex) {
+					// the old item then simply stays in the trash
+				}
+			}
+		}
+		return null;
+	}
+
+	/** The name a file gets at the destination, after applying the user's choice (replaces the old item when overwriting). */
+	String resolveName(TeraClient c, String dir, String name, DupPlan p) throws Exception {
+		if (p == null || !p.active)
+			return name;
+		java.util.HashMap<String, TeraEntry> have = remoteNames(c, p, dir);
+		if (!have.containsKey(name)) {
+			have.put(name, new TeraEntry());
+			return name;
+		}
+		if (p.mode.equals("newcopy")) {
+			String nn = uniqueName(name, have.keySet());
+			have.put(nn, new TeraEntry());
+			return nn;
+		}
+		TeraEntry old = have.get(name);
+		if (old != null && old.path != null && old.path.length() > 0) {
+			ArrayList<String> paths = new ArrayList<String>();
+			paths.add(old.path);
+			java.util.HashSet<String> names = new java.util.HashSet<String>();
+			names.add(name);
+			String err = deleteReplaced(c, paths, names);
+			if (err != null)
+				throw new Exception(err);
+			old.path = "";
+		}
+		return name;
+	}
+
+	/** folder uploads: the name of the folder at the destination (Keep both -> a new name; Overwrite -> merge into the old one) */
+	String chooseRoot(TeraClient c, String dest, String rootName, DupPlan p) {
+		if (p.rootName != null)
+			return p.rootName;
+		java.util.HashMap<String, TeraEntry> have = remoteNames(c, p, dest);
+		String r = rootName;
+		if (have.containsKey(rootName)) {
+			if (p.mode.equals("newcopy"))
+				r = uniqueName(rootName, have.keySet());
+			else if (p.mode.equals("overwrite"))
+				p.active = true; // merge: files with the same name inside are replaced
+		}
+		p.rootName = r;
+		return r;
+	}
+
+	/** Looks for names that already exist in dir and asks what to do about them before the upload starts. */
+	void checkUploadDup(final String dir, final ArrayList<String> names, final boolean folder, final DupAsk cb) {
+		final TeraClient c = client;
+		if (c == null)
+			return;
+		final DupPlan plan = new DupPlan();
+		execDl.execute(new Runnable() {
+			public void run() {
+				java.util.HashMap<String, TeraEntry> have = remoteNames(c, plan, dir);
+				final ArrayList<String> clash = new ArrayList<String>();
+				for (int i = 0; i < names.size(); i++)
+					if (have.containsKey(names.get(i)) && !clash.contains(names.get(i)))
+						clash.add(names.get(i));
+				runOnUiThread(new Runnable() {
+					public void run() {
+						if (clash.isEmpty()) {
+							cb.go(plan);
+							return;
+						}
+						String what;
+						if (clash.size() == 1)
+							what = (folder ? "The folder \"" : "\"") + clash.get(0) + "\" already exists in " + dir + ".";
+						else
+							what = clash.size() + " items already exist in " + dir + " (" + clash.get(0) + ", " + clash.get(1)
+									+ (clash.size() > 2 ? ", ..." : "") + ").";
+						new DragBuilder(MainActivity.this).setTitle("Already exists")
+								.setMessage(what + "\nWhat should happen to them?")
+								.setPositiveButton("Overwrite", new DialogInterface.OnClickListener() {
+									public void onClick(DialogInterface d, int w) {
+										plan.mode = "overwrite";
+										plan.active = !folder;
+										cb.go(plan);
+									}
+								}).setNeutralButton("Keep both", new DialogInterface.OnClickListener() {
+									public void onClick(DialogInterface d, int w) {
+										plan.mode = "newcopy";
+										plan.active = !folder;
+										cb.go(plan);
+									}
+								}).setNegativeButton("Cancel", null).show();
+					}
+				});
+			}
+		});
+	}
+
+	/**
+	 * Makes sure a remote folder exists. TeraBox does not refuse a folder that already exists: it quietly creates a
+	 * second one with a time stamp in its name ("tmp4_20261031_155619"). So when merging into an existing folder the
+	 * folder is looked up first, and a stray copy that does get created is removed again.
+	 */
+	void ensureRemoteFolder(TeraClient c, String path, DupPlan plan) throws Exception {
+		int slash = path.lastIndexOf('/');
+		String parent = slash <= 0 ? "/" : path.substring(0, slash);
+		String name = path.substring(slash + 1);
+		java.util.HashMap<String, TeraEntry> have = null;
+		if (plan != null && plan.active) {
+			have = remoteNames(c, plan, parent);
+			TeraEntry old = have.get(name);
+			if (old != null && old.isDir)
+				return; // merge into the existing folder
+		}
 		JSONObject response = c.mkdir(path);
 		int errno = response.optInt("errno", 0);
-		if (errno != 0 && errno != -8 && errno != 12) throw new Exception("Cannot create folder " + path + ": " + response.toString());
+		if (errno != 0 && errno != -8 && errno != 12)
+			throw new Exception("Cannot create folder " + path + ": " + response.toString());
+		String got = response.optString("path", "");
+		if (errno == 0 && got.length() > 0 && !got.equals(path)) {
+			// TeraBox made a renamed duplicate because the folder was already there: delete that extra folder
+			try {
+				c.fileManager("delete", new JSONArray().put(new JSONObject().put("path", got)));
+			} catch (Exception ex) {
+				// harmless leftover
+			}
+		}
+		if (have != null) {
+			TeraEntry t = new TeraEntry();
+			t.isDir = true;
+			have.put(name, t);
+		}
 	}
 
 	String displayName(Uri u) {
@@ -3298,6 +3615,17 @@ public class MainActivity extends Activity {
 	}
 
 	void uploadUris(final ArrayList<Uri> uris, final String dir) {
+		ArrayList<String> names = new ArrayList<String>();
+		for (int i = 0; i < uris.size(); i++)
+			names.add(displayName(uris.get(i)));
+		checkUploadDup(dir, names, false, new DupAsk() {
+			public void go(DupPlan plan) {
+				uploadUrisRun(uris, dir, plan);
+			}
+		});
+	}
+
+	void uploadUrisRun(final ArrayList<Uri> uris, final String dir, final DupPlan plan) {
 		final TeraClient c = client;
 		if (c == null)
 			return;
@@ -3328,7 +3656,7 @@ public class MainActivity extends Activity {
 							in.close();
 						}
 						st.message("(" + (i + 1) + "/" + uris.size() + ")  " + name);
-						c.uploadFile(local, dir, name, st);
+						c.uploadFile(local, dir, resolveName(c, dir, name, plan), st);
 						local.delete();
 						ok++;
 					}
@@ -3355,7 +3683,7 @@ public class MainActivity extends Activity {
 						else
 							showErrorResume("Upload stopped after " + fok + " file(s):\n" + ferr, new Runnable() {
 								public void run() {
-									uploadUris(new ArrayList<Uri>(uris.subList(fok, uris.size())), dir);
+									uploadUrisRun(new ArrayList<Uri>(uris.subList(fok, uris.size())), dir, plan);
 								}
 							});
 					}
