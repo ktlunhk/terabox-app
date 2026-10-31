@@ -2475,6 +2475,7 @@ public class MainActivity extends Activity {
 						if (nn.equals(e.name)) { message = "A file or folder with this name already exists"; break; }
 					}
 				}
+				error.setTextColor(ERR);
 				error.setText(message == null ? "" : message);
 				error.setVisibility(message == null || nn.length() == 0 ? View.GONE : View.VISIBLE);
 				Button create = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
@@ -2496,6 +2497,7 @@ public class MainActivity extends Activity {
 				final boolean folder = rf.isChecked();
 				final String remote = (dirNow.equals("/") ? "" : dirNow) + "/" + nn;
 				dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(false);
+				error.setTextColor(MUTED); // a progress note, not an error: normal theme colour
 				error.setText("Checking name...");
 				error.setVisibility(View.VISIBLE);
 				final TeraClient c = client;
@@ -2514,6 +2516,7 @@ public class MainActivity extends Activity {
 								public void run() {
 									if (!dialog.isShowing()) return;
 									if (exists) {
+										error.setTextColor(ERR);
 										error.setText("A file or folder with this name already exists");
 										dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(false);
 										return;
@@ -2532,6 +2535,7 @@ public class MainActivity extends Activity {
 							runOnUiThread(new Runnable() {
 								public void run() {
 									if (!dialog.isShowing()) return;
+									error.setTextColor(ERR);
 									error.setText("Could not check name: " + ex.getMessage());
 									dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
 								}
@@ -4223,7 +4227,35 @@ public class MainActivity extends Activity {
 			loadTrash(top[0], top[1]);
 		} else {
 			showFiles();
+			if (trashRestored) {
+				trashRestored = false;
+				cache.clear();
+				reloadCurrent(); // show the items that were restored into this folder
+			}
 		}
+	}
+
+	boolean trashRestored;
+
+	/** until this time a root trash list that still shows items (or an error) is treated as empty: the server clears in the background */
+	long trashEmptyUntil;
+
+	/** show an empty trash right away (after "Empty trash" or after deleting / restoring the last items) */
+	void markTrashEmpty() {
+		trashEmptyUntil = System.currentTimeMillis() + 12000;
+		trashDir = "";
+		trashFid = "";
+		trashEntries = new ArrayList<TeraEntry>();
+		if (trashAdapter != null)
+			trashAdapter.setData(trashEntries);
+		if (trashEmpty != null) {
+			trashEmpty.setText("The trash is empty.");
+			trashEmpty.setVisibility(View.VISIBLE);
+		}
+		if (trashTitle != null)
+			trashTitle.setText("Trash");
+		tsel.clear();
+		onTrashSel();
 	}
 
 	void loadTrash(final String dir, final String fid) {
@@ -4258,12 +4290,26 @@ public class MainActivity extends Activity {
 							if (screen != SCREEN_TRASH)
 								return;
 							trashLoad.setVisibility(View.INVISIBLE);
-							if (fe == -6) {
+							int err = fe;
+							if (dir.length() == 0 && System.currentTimeMillis() < trashEmptyUntil && fe != -6) {
+								// the trash was just emptied: the server may still list old items, or report "nothing here"
+								// as an error. Show it empty and check again shortly.
+								err = 0;
+								list.clear();
+								trashLoad.postDelayed(new Runnable() {
+									public void run() {
+										if (screen == SCREEN_TRASH && trashDir.length() == 0
+												&& System.currentTimeMillis() < trashEmptyUntil)
+											loadTrash("", "");
+									}
+								}, 2000);
+							}
+							if (err == -6) {
 								signOut("Your session expired. Please sign in again.");
 								return;
 							}
-							if (fe != 0) {
-								toast("Could not read the trash (error " + fe + ")");
+							if (err != 0) {
+								toast("Could not read the trash (error " + err + ")");
 								return;
 							}
 							trashDir = dir;
@@ -4295,6 +4341,7 @@ public class MainActivity extends Activity {
 		final ArrayList<String> ids = selectedTrash();
 		if (ids.isEmpty())
 			return;
+		final boolean everything = trashDir.length() == 0 && trashEntries != null && ids.size() >= trashEntries.size();
 		runJob(op.equals("restore") ? "Restoring..." : "Deleting...", new Job() {
 			public String run(TeraClient c) throws Exception {
 				return chk(c.recycleAction(op, ids), op.equals("restore") ? "Restore" : "Delete");
@@ -4302,6 +4349,12 @@ public class MainActivity extends Activity {
 		}, new Runnable() {
 			public void run() {
 				tsel.clear();
+				if (op.equals("restore")) {
+					cache.clear(); // restored items must show up when you go back to their folder
+					trashRestored = true;
+				}
+				if (everything)
+					markTrashEmpty();
 				loadTrash(trashDir, trashFid);
 				refreshQuota();
 			}
@@ -4333,6 +4386,7 @@ public class MainActivity extends Activity {
 						}, new Runnable() {
 							public void run() {
 								trashStack.clear();
+								markTrashEmpty();
 								loadTrash("", "");
 								refreshQuota();
 							}
