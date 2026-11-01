@@ -35,6 +35,15 @@ import org.json.JSONObject;
  */
 public class TeraClient {
 
+	/** Cooperative cancellation at API request boundaries, isolated per worker thread. */
+	public interface CancelCheck { boolean cancelled(); }
+	private static final ThreadLocal<CancelCheck> operationCancel = new ThreadLocal<CancelCheck>();
+	public static void setOperationCancel(CancelCheck check) { operationCancel.set(check); }
+	public static void clearOperationCancel() { operationCancel.remove(); }
+	public static void checkOperationCancel() throws IOException {
+		CancelCheck check = operationCancel.get();
+		if (check != null && check.cancelled()) throw new IOException("Cancelled");
+	}
 	static final String DOMAIN = "terabox.com";
 	static final String UA = "terabox;1.40.0.132;PC;PC-Windows;10.0.26100;WindowsTeraBox";
 	static final int TIMEOUT = 20000;
@@ -216,6 +225,7 @@ public class TeraClient {
 
 	Resp request(String method, String url, LinkedHashMap<String, String> form, String[] extra, boolean sendCookie,
 			boolean multipart, int timeout) throws Exception {
+		checkOperationCancel();
 		HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
 		try {
 			c.setInstanceFollowRedirects(false);
@@ -641,11 +651,9 @@ public class TeraClient {
 			dest.delete();
 			have = 0;
 		}
-		if (expectedSize > 0 && have == expectedSize) {
-			if (pg != null)
-				pg.onProgress(have, expectedSize);
-			return;
-		}
+		// A matching byte count is not proof of a valid previous download.
+		// Callers must commit verified temporary files, not trust stale final files.
+
 		for (int hop = 0; hop <= 6; hop++) {
 			URL u = new URL(url);
 			if (!"https".equals(u.getProtocol()) || u.getHost().length() == 0 || u.getUserInfo() != null)
@@ -676,7 +684,8 @@ public class TeraClient {
 				boolean partial = status == 206 && have > 0;
 				if (partial) {
 					String cr = c.getHeaderField("Content-Range");
-					if (cr == null || !cr.trim().startsWith("bytes " + have + "-")) {
+					if (cr == null || !cr.matches("bytes " + have + "-[0-9]+/[0-9]+") ||
+					(expectedSize > 0 && !cr.endsWith("/" + expectedSize))) {
 						dest.delete();
 						have = 0;
 						continue;
@@ -716,6 +725,8 @@ public class TeraClient {
 					}
 					if (pg != null)
 						pg.onProgress(done, total);
+					if (len >= 0 && done - have != len)
+						throw new IOException("Incomplete HTTP response: " + (done - have) + " of " + len + " bytes.");
 					if (expectedSize > 0 && done != expectedSize)
 						throw new IOException("Size mismatch: got " + done + " of " + expectedSize + " bytes.");
 				} finally {
@@ -734,26 +745,41 @@ public class TeraClient {
 	/** Fetch with a fresh download URL after a truncated or expired response.
 	 * Never expose an incomplete file to the editor or previewer. */
 	public void downloadEntry(String path, String fsId, File dest, long expectedSize, Progress pg) throws Exception {
+		File part = new File(dest.getAbsolutePath() + ".part");
+		File old = new File(dest.getAbsolutePath() + ".previous");
+		// Recover a destination backed up immediately before an interrupted commit.
+		if (!dest.exists() && old.exists() && !old.renameTo(dest))
+			throw new IOException("Cannot restore previous download: " + dest.getName());
 		IOException last = null;
 		for (int attempt = 0; attempt < 3; attempt++) {
 			if (pg != null && pg.cancelled()) throw new IOException("Cancelled");
-			if (attempt > 0 && dest.exists()) dest.delete();
+			// A fresh signed URL can point to different content; restart safely.
+			if (part.exists() && !part.delete()) throw new IOException("Cannot reset temporary download");
 			try {
 				String link = getDownloadLink(path, fsId);
-				downloadTo(link, dest, expectedSize, pg);
+				downloadTo(link, part, expectedSize, pg);
+				if (expectedSize >= 0 && part.length() != expectedSize)
+					throw new IOException("Incomplete file: " + part.length() + " of " + expectedSize);
+				// Do not destroy an existing good destination if rename fails.
+				// Retain any existing backup until a replacement has been safely committed.
+				if (old.exists() && dest.exists() && !old.delete()) throw new IOException("Cannot rotate old backup");
+				if (old.exists() && !dest.exists()) throw new IOException("Unrecovered backup exists");
+				if (dest.exists() && !dest.renameTo(old)) throw new IOException("Cannot back up destination");
+				if (!part.renameTo(dest)) {
+					if (old.exists()) old.renameTo(dest);
+					throw new IOException("Cannot commit completed download");
+				}
+				if (old.exists()) old.delete();
 				return;
 			} catch (IOException ex) {
 				last = ex;
 				String msg = ex.getMessage() == null ? "" : ex.getMessage();
 				if ("Cancelled".equals(msg) || msg.startsWith("Refusing a non-HTTPS")) throw ex;
-				if (dest.exists()) dest.delete();
-			}
+			} finally { if (part.exists()) part.delete(); }
 		}
 		throw new IOException("Unable to download the complete file after 3 attempts. " +
 			(last == null ? "" : last.getMessage()));
 	}
-
-	// ================================================================== file operations (stage 2 / 3)
 
 	static final LinkedHashMap<String, String> APP = new LinkedHashMap<String, String>();
 	static {
