@@ -175,7 +175,7 @@ class TextEditor {
 		tv.configureGuides("html".equals(EditorHighlighter.detectLanguage(entry.name)), true, 4);
 
 		View divider = new View(a);
-		divider.setBackgroundColor(0xFF3C4048);
+		divider.setBackgroundColor(MainActivity.DIVIDER);
 
 		tv.setViewListener(new PreviewTextView.Listener() {
 			public void onViewScrolled() {
@@ -198,31 +198,11 @@ class TextEditor {
 		lineNums.setTotalLines(lineCount);
 
 		// ---- title bar ----
-		LinearLayout bar = new LinearLayout(a);
-		bar.setOrientation(LinearLayout.HORIZONTAL);
-		bar.setGravity(Gravity.CENTER_VERTICAL);
-		bar.setBackgroundColor(MainActivity.PANEL); // same as the file list header
-		bar.setPadding(0, a.dp(MainActivity.BAR_TOP_DP), 0, 0);
-		TextView back = new TextView(a);
-		back.setText("\u2190");
-		back.setTextColor(MainActivity.TEXT);
-		back.setTextSize(20);
-		back.setGravity(Gravity.CENTER);
-		back.setPadding(a.dp(16), 0, a.dp(16), 0);
-		back.setOnClickListener(new View.OnClickListener() {
+		LinearLayout bar = UI.titleBar(a, "\u2190", entry.name, new View.OnClickListener() {
 			public void onClick(View v) {
 				onBack();
 			}
-		});
-		bar.addView(back, new LinearLayout.LayoutParams(-2, -1));
-		TextView titleTv = new TextView(a);
-		titleTv.setText(entry.name);
-		titleTv.setTextSize(16);
-		titleTv.setTextColor(MainActivity.TEXT);
-		titleTv.setSingleLine(true);
-		titleTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-		titleTv.setGravity(Gravity.CENTER_VERTICAL);
-		bar.addView(titleTv, new LinearLayout.LayoutParams(0, -1, 1));
+		}, TextUtils.TruncateAt.MIDDLE);
 
 		// ---- tool row ----
 		LinearLayout tools = new LinearLayout(a);
@@ -356,7 +336,7 @@ class TextEditor {
 		LinearLayout screen = new LinearLayout(a);
 		screen.setOrientation(LinearLayout.VERTICAL);
 		screen.setBackgroundColor(MainActivity.BG);
-		screen.addView(bar, new LinearLayout.LayoutParams(-1, a.dp(MainActivity.BAR_TOP_DP + MainActivity.BAR_ROW_DP))); // same height as the other title bars
+		screen.addView(bar, UI.barParams(a)); // same height as the other title bars
 		screen.addView(toolsScroll, new LinearLayout.LayoutParams(-1, a.dp(40)));
 		screen.addView(searchBar, new LinearLayout.LayoutParams(-1, -2));
 		screen.addView(zoomWrap, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -575,9 +555,8 @@ class TextEditor {
 		input.setHint("Line number");
 		input.setSingleLine(true);
 		input.setInputType(InputType.TYPE_CLASS_NUMBER);
-		input.setTextColor(MainActivity.TEXT);
-		input.setHintTextColor(MainActivity.MUTED);
-		new DragBuilder(a).setTitle("Go to line").setView(input)
+		a.dialogEdit(input);
+		new DragBuilder(a).setTitle("Go to line").setView(a.inputBox(input))
 				.setPositiveButton("Go", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						try {
@@ -757,7 +736,7 @@ class TextEditor {
 			int s = Math.max(0, tv.getSelectionStart()), e = Math.max(0, tv.getSelectionEnd());
 			tv.getText().replace(Math.min(s, e), Math.max(s, e), t);
 		} catch (Exception ex) {
-			a.toast("Can't paste");
+			a.toast("Could not paste");
 		}
 	}
 }
