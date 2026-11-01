@@ -23,7 +23,7 @@ public class TransferNotifier {
 		int id;
 		String title = "", text = "";
 		boolean up;
-		boolean[] cancel;
+		java.util.concurrent.atomic.AtomicBoolean cancel;
 		long done, total, lastNotify;
 	}
 
@@ -87,7 +87,7 @@ public class TransferNotifier {
 	}
 
 	/** start tracking a job; returns its id */
-	static synchronized int begin(Context c, String title, boolean up, boolean[] cancel) {
+	static synchronized int begin(Context c, String title, boolean up, java.util.concurrent.atomic.AtomicBoolean cancel) {
 		app = c.getApplicationContext();
 		ensureChannel();
 		Entry j = new Entry();
@@ -107,7 +107,8 @@ public class TransferNotifier {
 				else
 					app.startService(si);
 			} catch (Exception e) {
-				// the transfer still runs, just without foreground protection
+				jobs.remove(j.id);
+				throw new IllegalStateException("Cannot start protected background transfer", e);
 			}
 		}
 		return j.id;
@@ -138,8 +139,6 @@ public class TransferNotifier {
 				s.shutDown();
 			else
 				app.stopService(new Intent(app, TransferService.class));
-		} else if (id == fgId && TransferService.inst != null) {
-			TransferService.inst.refresh(); // another job takes over as the foreground notification
 		}
 		nm().cancel(id);
 	}
@@ -149,7 +148,7 @@ public class TransferNotifier {
 		Entry j = jobs.get(id);
 		if (j == null)
 			return;
-		j.cancel[0] = true;
+		j.cancel.set(true);
 		j.text = "Cancelling...";
 		// No per-file progress notification.
 	}
