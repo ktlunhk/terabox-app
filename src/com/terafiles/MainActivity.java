@@ -104,12 +104,15 @@ public class MainActivity extends Activity {
 			return false;
 		if (mode == 2)
 			return true;
-		return (getResources().getConfiguration().uiMode
-				& android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+		return (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+				== android.content.res.Configuration.UI_MODE_NIGHT_YES;
 	}
 
 	SharedPreferences prefs;
-	ExecutorService exec = Executors.newSingleThreadExecutor();
+	// Navigation and metadata must not wait behind slow file operations.
+	ExecutorService exec = Executors.newFixedThreadPool(3);
+	ExecutorService navigationExec = Executors.newSingleThreadExecutor();
+	ExecutorService metadataExec = Executors.newSingleThreadExecutor();
 	ExecutorService execDl = Executors.newCachedThreadPool();
 	int dp1;
 
@@ -130,8 +133,7 @@ public class MainActivity extends Activity {
 	SlideCaptchaView captchaView;
 
 	// screens
-	static final int SCREEN_LOGIN = 0, SCREEN_FILES = 1, SCREEN_TRASH = 2, SCREEN_SHARES = 3, SCREEN_SEARCH = 4,
-			SCREEN_EDIT = 5, SCREEN_SETTINGS = 6;
+	static final int SCREEN_LOGIN = 0, SCREEN_FILES = 1, SCREEN_TRASH = 2, SCREEN_SHARES = 3, SCREEN_SEARCH = 4, SCREEN_EDIT = 5, SCREEN_SETTINGS = 6;
 	TextEditor editor; // open text editor, if any
 	int screen;
 
@@ -177,12 +179,12 @@ public class MainActivity extends Activity {
 		if (!dark)
 			setTheme(themeRes != 0 ? themeRes : android.R.style.Theme_Material_Light_NoActionBar);
 		super.onCreate(b);
+		cleanupDisposableCache();
 		dp1 = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
 		prefs = getSharedPreferences("terafiles", MODE_PRIVATE);
 		TeraClient.resumeDir = new File(getFilesDir(), "resume");
-		if (Build.VERSION.SDK_INT >= 33
-				&& checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED)
-			requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 8);
+		if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED)
+			requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, 8);
 		String ck = prefs.getString("cookie", "");
 		if (ck.indexOf("ndus=") >= 0) {
 			client = new TeraClient(ck, prefs.getString("whost", ""));
@@ -200,15 +202,32 @@ public class MainActivity extends Activity {
 	protected void onResume() {
 		super.onResume();
 		TransferNotifier.appVisible = true;
-		if (activeFolderUpload != null)
-			activeFolderUpload.showInsideApp();
+		if (activeFolderUpload != null) activeFolderUpload.showInsideApp();
 	}
 
 	protected void onPause() {
 		TransferNotifier.appVisible = false;
-		if (activeFolderUpload != null)
-			activeFolderUpload.hideInsideApp();
+		if (activeFolderUpload != null) activeFolderUpload.hideInsideApp();
 		super.onPause();
+	}
+
+	private volatile boolean activityDestroyed;
+
+	/** Ignore worker callbacks once this Activity has been destroyed. */
+	void postIfAlive(final Runnable action) {
+		if (activityDestroyed || isFinishing()) return;
+		runOnUiThread(new Runnable() {
+			public void run() {
+				if (activityDestroyed || isFinishing() ||
+					(android.os.Build.VERSION.SDK_INT >= 17 && isDestroyed())) return;
+				action.run();
+			}
+		});
+	}
+
+	@Override protected void onDestroy() {
+		activityDestroyed = true;
+		super.onDestroy();
 	}
 
 	// ------------------------------------------------------------------ helpers
@@ -218,7 +237,7 @@ public class MainActivity extends Activity {
 	}
 
 	void toast(final String s) {
-		runOnUiThread(new Runnable() {
+		postIfAlive(new Runnable() {
 			public void run() {
 				Toast.makeText(MainActivity.this, s, Toast.LENGTH_SHORT).show();
 			}
@@ -229,7 +248,7 @@ public class MainActivity extends Activity {
 		if (b < 1024)
 			return b + " B";
 		double v = b / 1024.0;
-		String[] u = new String[]{"KB", "MB", "GB", "TB"};
+		String[] u = new String[] { "KB", "MB", "GB", "TB" };
 		int i = 0;
 		while (v >= 1024 && i < u.length - 1) {
 			v /= 1024;
@@ -291,17 +310,47 @@ public class MainActivity extends Activity {
 		e.setTextSize(16);
 	}
 
+	/** Delete old disposable preview data, but retain edit drafts and active transfers. */
+	void cleanupDisposableCache() {
+		sweepOld(new File(getFilesDir(), "resume"), 24L * 3600 * 1000, null, 0); // upload sessions expire after a day
+		sweepOld(new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "TeraBox"),
+				7L * 24 * 3600 * 1000, ".part", 0); // abandoned partial downloads
+		File[] roots = { new File(getCacheDir(), "previews"), new File(getCacheDir(), "preview") };
+		long cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000;
+		for (int i = 0; i < roots.length; i++) {
+			File[] files = roots[i].listFiles();
+			if (files == null) continue;
+			for (int j = 0; j < files.length; j++)
+				if (files[j].isFile() && files[j].lastModified() < cutoff) files[j].delete();
+		}
+	}
+
+	/** delete files older than maxAge (only names ending in suffix, when given) below dir */
+	static void sweepOld(File dir, long maxAge, String suffix, int depth) {
+		try {
+			File[] kids = dir.listFiles();
+			if (kids == null || depth > 6) return;
+			long cutoff = System.currentTimeMillis() - maxAge;
+			for (int i = 0; i < kids.length; i++) {
+				if (kids[i].isDirectory()) sweepOld(kids[i], maxAge, suffix, depth + 1);
+				else if (kids[i].lastModified() < cutoff && (suffix == null || kids[i].getName().endsWith(suffix))) kids[i].delete();
+			}
+		} catch (Exception e) {
+		}
+	}
+
 	void saveSession(String email) {
-		if (client == null)
-			return;
-		SharedPreferences.Editor ed = prefs.edit();
-		ed.putString("cookie", client.getCookie());
-		ed.putString("whost", client.getWhost());
-		if (client.getBrowserId().length() > 0)
-			ed.putString("browserid", client.getBrowserId());
-		if (email != null)
-			ed.putString("email", email);
-		ed.commit();
+		if (client == null) return;
+		String cookie = client.getCookie(), host = client.getWhost(), browser = client.getBrowserId();
+		boolean changed = !cookie.equals(prefs.getString("cookie", "")) ||
+			!host.equals(prefs.getString("whost", "")) ||
+			(browser.length() > 0 && !browser.equals(prefs.getString("browserid", ""))) ||
+			(email != null && !email.equals(prefs.getString("email", "")));
+		if (!changed) return;
+		SharedPreferences.Editor ed = prefs.edit().putString("cookie", cookie).putString("whost", host);
+		if (browser.length() > 0) ed.putString("browserid", browser);
+		if (email != null) ed.putString("email", email);
+		ed.apply();
 	}
 
 	/** Shows the signed-in session cookie (and the ndus value) so it can be copied into another app. */
@@ -313,10 +362,8 @@ public class MainActivity extends Activity {
 		LinearLayout box = new LinearLayout(this);
 		box.setOrientation(LinearLayout.VERTICAL);
 		box.setPadding(dp(20), dp(8), dp(20), 0);
-		TextView warn = mkText(
-				"Anyone with this cookie can use your TeraBox account. Keep it private and sign out here "
-						+ "if it leaks.",
-				12, MUTED);
+		TextView warn = mkText("Anyone with this cookie can use your TeraBox account. Keep it private and sign out here "
+				+ "if it leaks.", 12, MUTED);
 		warn.setPadding(0, 0, 0, dp(8));
 		box.addView(warn);
 		TextView l1 = mkText("ndus (login token)", 13, MUTED);
@@ -410,9 +457,8 @@ public class MainActivity extends Activity {
 		show.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
 			public void onCheckedChanged(CompoundButton cb, boolean on) {
 				int sel = loginPass.getSelectionEnd();
-				loginPass.setInputType(InputType.TYPE_CLASS_TEXT | (on
-						? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-						: InputType.TYPE_TEXT_VARIATION_PASSWORD));
+				loginPass.setInputType(InputType.TYPE_CLASS_TEXT
+						| (on ? InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD : InputType.TYPE_TEXT_VARIATION_PASSWORD));
 				if (sel >= 0)
 					loginPass.setSelection(sel);
 			}
@@ -510,18 +556,17 @@ public class MainActivity extends Activity {
 						loginEmailUsed = email;
 					}
 					final TeraClient.LoginResult r = loginClient.login(email, pass, token);
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							onLoginResult(r, email);
 						}
 					});
 				} catch (final Exception e) {
 					final String step = loginClient == null ? "" : loginClient.lastStep;
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							setLoginBusy(false);
-							setLoginStatus(
-									"Login error: " + e.getMessage() + (step.length() > 0 ? "  [" + step + "]" : ""),
+							setLoginStatus("Login error: " + e.getMessage() + (step.length() > 0 ? "  [" + step + "]" : ""),
 									true);
 						}
 					});
@@ -544,8 +589,7 @@ public class MainActivity extends Activity {
 		if (r.captchaRequired) {
 			if (r.requestId.length() == 0) {
 				captchaPanel.setVisibility(View.GONE);
-				setLoginStatus(
-						"TeraBox asked for a verification but gave no challenge id. Try again later, or sign in with an ndus token.",
+				setLoginStatus("TeraBox asked for a verification but gave no challenge id. Try again later, or sign in with an ndus token.",
 						true);
 				return;
 			}
@@ -581,8 +625,7 @@ public class MainActivity extends Activity {
 					if (d == null)
 						throw new Exception("Unexpected challenge response from TeraBox.");
 					JSONObject data = r.optJSONObject("data");
-					String cid = d.optString("challenge_id",
-							r.optString("challenge_id", data == null ? "" : data.optString("challenge_id", "")));
+					String cid = d.optString("challenge_id", r.optString("challenge_id", data == null ? "" : data.optString("challenge_id", "")));
 					if (cid.length() == 0 || cid.length() > 512)
 						throw new Exception("Challenge has no id.");
 					final int mw = d.optInt("master_width"), mh = d.optInt("master_height");
@@ -593,7 +636,7 @@ public class MainActivity extends Activity {
 					final Bitmap master = fetchBitmap(d.optString("master_image", ""));
 					final Bitmap tile = fetchBitmap(d.optString("tile_image", ""));
 					final String fcid = cid;
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							captchaChallengeId = fcid;
 							captchaView.setChallenge(master, tile, mw, mh, tw, th, tx, ty);
@@ -602,10 +645,9 @@ public class MainActivity extends Activity {
 						}
 					});
 				} catch (final Exception e) {
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
-							setLoginStatus("Challenge error: " + e.getMessage() + "  Tap \"Load another challenge\".",
-									true);
+							setLoginStatus("Challenge error: " + e.getMessage() + "  Tap \"Load another challenge\".", true);
 						}
 					});
 				}
@@ -623,8 +665,7 @@ public class MainActivity extends Activity {
 			return b;
 		}
 		URL u = new URL(src);
-		if (!"https".equals(u.getProtocol())
-				|| !u.getHost().matches("(?i)^(?:.+\\.)?(?:terabox\\.com|teraboxcdn\\.com)$"))
+		if (!"https".equals(u.getProtocol()) || !u.getHost().matches("(?i)^(?:.+\\.)?(?:terabox\\.com|teraboxcdn\\.com)$"))
 			throw new Exception("Unsupported challenge image address.");
 		HttpURLConnection c = (HttpURLConnection) u.openConnection();
 		try {
@@ -659,7 +700,7 @@ public class MainActivity extends Activity {
 					JSONObject holder = TeraClient.pick(r, "capt_token");
 					final String token = holder == null ? "" : holder.optString("capt_token", "");
 					if (code == 0 && token.length() > 0 && token.length() <= 4096) {
-						runOnUiThread(new Runnable() {
+						postIfAlive(new Runnable() {
 							public void run() {
 								pendingToken = token;
 								captchaPanel.setVisibility(View.GONE);
@@ -667,7 +708,7 @@ public class MainActivity extends Activity {
 							}
 						});
 					} else {
-						runOnUiThread(new Runnable() {
+						postIfAlive(new Runnable() {
 							public void run() {
 								setLoginStatus("Position not accepted. Loading a new challenge...", true);
 								loadChallenge();
@@ -675,7 +716,7 @@ public class MainActivity extends Activity {
 						});
 					}
 				} catch (final Exception e) {
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							setLoginStatus("Verification error: " + e.getMessage(), true);
 							loadChallenge();
@@ -710,7 +751,7 @@ public class MainActivity extends Activity {
 							final TeraClient c = new TeraClient(t, null);
 							JSONObject j = c.checkLogin(0);
 							final boolean ok = j.optInt("errno", -1) == 0;
-							runOnUiThread(new Runnable() {
+							postIfAlive(new Runnable() {
 								public void run() {
 									setLoginBusy(false);
 									if (ok) {
@@ -724,7 +765,7 @@ public class MainActivity extends Activity {
 								}
 							});
 						} catch (final Exception ex) {
-							runOnUiThread(new Runnable() {
+							postIfAlive(new Runnable() {
 								public void run() {
 									setLoginBusy(false);
 									setLoginStatus("Token check failed: " + ex.getMessage(), true);
@@ -871,8 +912,8 @@ public class MainActivity extends Activity {
 	}
 
 	/** top bar: [left glyph] title [refresh] [more] */
-	LinearLayout makeTopBar(String leftGlyph, TextView[] titleOut, View.OnClickListener left,
-			View.OnClickListener refresh, View.OnClickListener more, TextView[] moreOut) {
+	LinearLayout makeTopBar(String leftGlyph, TextView[] titleOut, View.OnClickListener left, View.OnClickListener refresh,
+			View.OnClickListener more, TextView[] moreOut) {
 		LinearLayout bar = new LinearLayout(this);
 		bar.setOrientation(LinearLayout.HORIZONTAL);
 		bar.setGravity(Gravity.CENTER_VERTICAL);
@@ -911,6 +952,7 @@ public class MainActivity extends Activity {
 	}
 
 	void showError(String m) {
+		if (activityDestroyed || isFinishing()) return;
 		new DragBuilder(this).setTitle("Error").setMessage(m).setPositiveButton("OK", null).show();
 	}
 
@@ -933,18 +975,14 @@ public class MainActivity extends Activity {
 	 * may still finish on the server. Refresh after cancellation to reconcile state. */
 	void runJob(String title, final Job job, final Runnable after) {
 		final TeraClient c = client;
-		if (c == null)
-			return;
-		final java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(
-				false);
+		if (c == null) return;
+		final java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
 		final ProgressDialog pd = new ProgressDialog(this);
 		pd.setMessage(title);
 		pd.setIndeterminate(true);
 		pd.setCancelable(false);
 		pd.setButton(DialogInterface.BUTTON_NEGATIVE, "Cancel", new DialogInterface.OnClickListener() {
-			public void onClick(DialogInterface d, int which) {
-				cancelled.set(true);
-			}
+			public void onClick(DialogInterface d, int which) { cancelled.set(true); }
 		});
 		pd.show();
 		DragBuilder.makeDraggable(pd);
@@ -952,28 +990,22 @@ public class MainActivity extends Activity {
 			public void run() {
 				String msg;
 				TeraClient.setOperationCancel(new TeraClient.CancelCheck() {
-					public boolean cancelled() {
-						return cancelled.get();
-					}
+					public boolean cancelled() { return cancelled.get(); }
 				});
 				try {
 					TeraClient.checkOperationCancel();
 					msg = job.run(c);
-					if (cancelled.get() && msg == null)
-						msg = "Cancelled";
+					if (cancelled.get() && msg == null) msg = "Cancelled";
 				} catch (Exception e) {
 					msg = e.getMessage() == null ? e.toString() : e.getMessage();
-				} finally {
-					TeraClient.clearOperationCancel();
-				}
+				} finally { TeraClient.clearOperationCancel(); }
 				final String m = msg;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						pd.dismiss();
 						if (m == null) {
 							cache.clear();
-							if (after != null)
-								after.run();
+							if (after != null) after.run();
 						} else if ("Cancelled".equals(m)) {
 							cache.clear();
 							reloadCurrent();
@@ -982,9 +1014,7 @@ public class MainActivity extends Activity {
 							signOut("Your session expired. Please sign in again.");
 						} else if ("CONFLICT".equals(m) && conflictAction != null) {
 							conflictAction.run();
-						} else {
-							showError(m);
-						}
+						} else { showError(m); }
 					}
 				});
 			}
@@ -1017,8 +1047,7 @@ public class MainActivity extends Activity {
 		volatile boolean finished;
 
 		void showInsideApp() {
-			if (!insideApp || finished || isFinishing())
-				return;
+			if (!insideApp || finished || isFinishing()) return;
 			if (pd == null) {
 				pd = new ProgressDialog(MainActivity.this);
 				pd.setTitle(title);
@@ -1026,9 +1055,7 @@ public class MainActivity extends Activity {
 				pd.setMax(100);
 				pd.setCancelable(false);
 				pd.setButton(DialogInterface.BUTTON_NEGATIVE, "Cancel", new DialogInterface.OnClickListener() {
-					public void onClick(DialogInterface d, int which) {
-						cancel.set(true);
-					}
+					public void onClick(DialogInterface d, int which) { cancel.set(true); }
 				});
 			}
 			if (!pd.isShowing()) {
@@ -1037,30 +1064,22 @@ public class MainActivity extends Activity {
 			}
 			pd.setMessage(label + (lastTotal > 0 ? "\n" + human(lastDone) + " / " + human(lastTotal) : ""));
 			pd.setIndeterminate(lastTotal <= 0);
-			if (lastTotal > 0)
-				pd.setProgress((int) Math.min(100, lastDone * 100 / lastTotal));
+			if (lastTotal > 0) pd.setProgress((int) Math.min(100, lastDone * 100 / lastTotal));
 		}
 
 		void hideInsideApp() {
-			if (insideApp && pd != null && pd.isShowing())
-				pd.dismiss();
+			if (insideApp && pd != null && pd.isShowing()) pd.dismiss();
 		}
 
 		void updateInsideApp() {
-			if (!insideApp)
-				return;
-			runOnUiThread(new Runnable() {
-				public void run() {
-					if (!finished && pd != null && pd.isShowing()) {
-						pd.setMessage(label + (lastDone > 0 || lastTotal > 0
-								? "\n" + human(lastDone) + (lastTotal > 0 ? " / " + human(lastTotal) : "")
-								: ""));
-						pd.setIndeterminate(lastTotal <= 0);
-						if (lastTotal > 0)
-							pd.setProgress((int) Math.min(100, lastDone * 100 / lastTotal));
-					}
+			if (!insideApp) return;
+			postIfAlive(new Runnable() { public void run() {
+				if (!finished && pd != null && pd.isShowing()) {
+					pd.setMessage(label + (lastDone > 0 || lastTotal > 0 ? "\n" + human(lastDone) + (lastTotal > 0 ? " / " + human(lastTotal) : "") : ""));
+					pd.setIndeterminate(lastTotal <= 0);
+					if (lastTotal > 0) pd.setProgress((int) Math.min(100, lastDone * 100 / lastTotal));
 				}
-			});
+			} });
 		}
 
 		JobStatus(String title) {
@@ -1099,7 +1118,7 @@ public class MainActivity extends Activity {
 				updateInsideApp();
 				return;
 			}
-			runOnUiThread(new Runnable() {
+			postIfAlive(new Runnable() {
 				public void run() {
 					pd.setMessage(m);
 				}
@@ -1112,7 +1131,7 @@ public class MainActivity extends Activity {
 				updateInsideApp();
 				return;
 			}
-			runOnUiThread(new Runnable() {
+			postIfAlive(new Runnable() {
 				public void run() {
 					pd.setMessage(label + "\n" + m);
 				}
@@ -1127,7 +1146,7 @@ public class MainActivity extends Activity {
 				updateInsideApp();
 				return;
 			}
-			runOnUiThread(new Runnable() {
+			postIfAlive(new Runnable() {
 				public void run() {
 					if (total > 0) {
 						pd.setIndeterminate(false);
@@ -1150,16 +1169,13 @@ public class MainActivity extends Activity {
 			if (jobId >= 0) {
 				TransferNotifier.end(jobId);
 				finished = true;
-				runOnUiThread(new Runnable() {
-					public void run() {
-						hideInsideApp();
-						if (activeFolderUpload == JobStatus.this)
-							activeFolderUpload = null;
-					}
-				});
+				postIfAlive(new Runnable() { public void run() {
+					hideInsideApp();
+					if (activeFolderUpload == JobStatus.this) activeFolderUpload = null;
+				} });
 				return;
 			}
-			runOnUiThread(new Runnable() {
+			postIfAlive(new Runnable() {
 				public void run() {
 					pd.dismiss();
 				}
@@ -1172,8 +1188,7 @@ public class MainActivity extends Activity {
 			if (err == null)
 				TransferNotifier.result(MainActivity.this, title + " finished", okText, true);
 			else if (!"Cancelled".equals(err))
-				TransferNotifier.result(MainActivity.this, title + " interrupted", err + "\nOpen TeraFiles to resume.",
-						false);
+				TransferNotifier.result(MainActivity.this, title + " interrupted", err + "\nOpen TeraFiles to resume.", false);
 		}
 	}
 
@@ -1219,9 +1234,7 @@ public class MainActivity extends Activity {
 		fileBar.setBackgroundColor(PANEL);
 		View home = iconButton("home", ACCENT, 16, 8);
 		home.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				loadDir("/", false);
-			}
+			public void onClick(View v) { loadDir("/", false); }
 		});
 		fileBar.addView(home);
 		// Scrollable, individually clickable path segments.
@@ -1245,24 +1258,18 @@ public class MainActivity extends Activity {
 		titleView = pathTitle;
 		View parentButton = iconButton("updir", ACCENT, 10, 10);
 		parentButton.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				goUp();
-			}
+			public void onClick(View v) { goUp(); }
 		});
 		pathRow.addView(parentButton); // right beside the path
 		fileParentButton = parentButton;
 		TextView refreshButton = barGlyph("\u21BB", 12, 12);
 		refreshButton.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				reloadCurrent();
-			}
+			public void onClick(View v) { reloadCurrent(); }
 		});
 		fileBar.addView(refreshButton);
 		TextView moreButton = barGlyph("\u22EE", 12, 16);
 		moreButton.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				showTopMenu(v);
-			}
+			public void onClick(View v) { showTopMenu(v); }
 		});
 		fileBar.addView(moreButton);
 		// storage used / total, small line at the top-left of the header
@@ -1309,17 +1316,13 @@ public class MainActivity extends Activity {
 		sortLabel.setGravity(Gravity.CENTER_VERTICAL);
 		sortLabel.setPadding(dp(12), dp(10), dp(4), dp(10));
 		sortLabel.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				showSortMenu(v);
-			}
+			public void onClick(View v) { showSortMenu(v); }
 		});
 		sortRow.addView(sortLabel);
 		TextView dropdown = mkText("\u2304", 20, TEXT);
 		dropdown.setPadding(dp(4), dp(8), dp(12), dp(8));
 		dropdown.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				showSortMenu(v);
-			}
+			public void onClick(View v) { showSortMenu(v); }
 		});
 		sortRow.addView(dropdown);
 		sortArrow = mkText("", 24, TEXT);
@@ -1352,28 +1355,28 @@ public class MainActivity extends Activity {
 			boolean tracking;
 			public boolean onTouch(View v, android.view.MotionEvent event) {
 				switch (event.getActionMasked()) {
-					case android.view.MotionEvent.ACTION_DOWN :
-						tracking = lv.getFirstVisiblePosition() == 0
-								&& (lv.getChildCount() == 0 || lv.getChildAt(0).getTop() >= lv.getPaddingTop());
-						startY = event.getY();
-						break;
-					case android.view.MotionEvent.ACTION_MOVE :
-						if (lv.getFirstVisiblePosition() != 0
-								|| (lv.getChildCount() > 0 && lv.getChildAt(0).getTop() < lv.getPaddingTop()))
-							tracking = false;
-						break;
-					case android.view.MotionEvent.ACTION_UP :
-						if (tracking && event.getY() - startY > dp(90) && loadBar != null
-								&& loadBar.getVisibility() != View.VISIBLE) {
-							tracking = false;
-							reloadCurrent();
-							return true;
-						}
+				case android.view.MotionEvent.ACTION_DOWN:
+					tracking = lv.getFirstVisiblePosition() == 0 &&
+						(lv.getChildCount() == 0 || lv.getChildAt(0).getTop() >= lv.getPaddingTop());
+					startY = event.getY();
+					break;
+				case android.view.MotionEvent.ACTION_MOVE:
+					if (lv.getFirstVisiblePosition() != 0 ||
+						(lv.getChildCount() > 0 && lv.getChildAt(0).getTop() < lv.getPaddingTop()))
 						tracking = false;
-						break;
-					case android.view.MotionEvent.ACTION_CANCEL :
+					break;
+				case android.view.MotionEvent.ACTION_UP:
+					if (tracking && event.getY() - startY > dp(90) &&
+						loadBar != null && loadBar.getVisibility() != View.VISIBLE) {
 						tracking = false;
-						break;
+						reloadCurrent();
+						return true;
+					}
+					tracking = false;
+					break;
+				case android.view.MotionEvent.ACTION_CANCEL:
+					tracking = false;
+					break;
 				}
 				return false;
 			}
@@ -1406,6 +1409,7 @@ public class MainActivity extends Activity {
 		emptyView.setVisibility(View.GONE);
 		root.addView(emptyView, new LinearLayout.LayoutParams(-1, -2));
 
+
 		setContentView(root);
 		updateTitle();
 		onSelChanged();
@@ -1434,6 +1438,7 @@ public class MainActivity extends Activity {
 
 	/** a small tappable drawn icon (see Icons) */
 	// Every title bar has the same height: a small top gap (the storage line on the file list) + one content row.
+	static final int BRAND_BLUE = 0xFF2D6AA0; // the app's blue (tick marks, editor toolbar)
 	static final int BAR_TOP_DP = 14, BAR_ROW_DP = 32, BAR_ICON_DP = 18;
 
 	/** home / parent icon: drawn about as large as the 17sp path text, in a row exactly as high as the title bar row */
@@ -1473,8 +1478,7 @@ public class MainActivity extends Activity {
 			filePathScroll.setVisibility(showCrumbs ? View.VISIBLE : View.GONE);
 		if (fileBreadcrumbs != null) {
 			fileBreadcrumbs.setVisibility(showCrumbs ? View.VISIBLE : View.GONE);
-			if (showCrumbs)
-				updateBreadcrumbs();
+			if (showCrumbs) updateBreadcrumbs();
 		}
 		if (fileParentButton != null)
 			fileParentButton.setVisibility(curDir.equals("/") || searchTerm != null ? View.GONE : View.VISIBLE);
@@ -1486,8 +1490,7 @@ public class MainActivity extends Activity {
 				else
 					files++;
 			}
-			infoView.setText(dirs + " folders, " + files + " files"
-					+ (sel.isEmpty() ? "" : "  \u00B7  " + selectedEntries().size() + " selected"));
+			infoView.setText(dirs + " folders, " + files + " files" + (sel.isEmpty() ? "" : "  \u00B7  " + selectedEntries().size() + " selected"));
 		}
 		if (quotaTop != null) {
 			quotaTop.setText(quotaText);
@@ -1511,26 +1514,20 @@ public class MainActivity extends Activity {
 		String[] parts = curDir.split("/");
 		String path = "";
 		for (int i = 0; i < parts.length; i++) {
-			if (parts[i].length() == 0)
-				continue;
+			if (parts[i].length() == 0) continue;
 			path += "/" + parts[i];
 			final String destination = path;
 			TextView segment = mkText("/" + parts[i], 17, TEXT);
 			segment.setSingleLine(true);
 			segment.setPadding(dp(3), dp(4), dp(3), dp(4));
 			segment.setOnClickListener(new View.OnClickListener() {
-				public void onClick(View v) {
-					if (!curDir.equals(destination))
-						loadDir(destination, false);
-				}
+				public void onClick(View v) { if (!curDir.equals(destination)) loadDir(destination, false); }
 			});
 			fileBreadcrumbs.addView(segment);
 		}
 		if (filePathScroll != null)
 			filePathScroll.post(new Runnable() {
-				public void run() {
-					filePathScroll.fullScroll(View.FOCUS_RIGHT);
-				}
+				public void run() { filePathScroll.fullScroll(View.FOCUS_RIGHT); }
 			});
 	}
 
@@ -1591,25 +1588,21 @@ public class MainActivity extends Activity {
 	}
 
 	void updateSortHeader() {
-		if (sortLabel != null)
-			sortLabel.setText(sortName());
-		if (sortArrow != null)
-			sortArrow.setText(prefs.getBoolean("sortDesc", false) ? "\u2193" : "\u2191");
+		if (sortLabel != null) sortLabel.setText(sortName());
+		if (sortArrow != null) sortArrow.setText(prefs.getBoolean("sortDesc", false) ? "\u2193" : "\u2191");
 	}
 
 	void applySortChange() {
 		sortList(entries);
-		for (ArrayList<TeraEntry> list : cache.values())
-			sortList(list);
-		if (adapter != null)
-			adapter.setData(entries);
+		for (ArrayList<TeraEntry> list : cache.values()) sortList(list);
+		if (adapter != null) adapter.setData(entries);
 		updateSortHeader();
 	}
 
 	void showSortMenu(View anchor) {
 		PopupMenu popup = newPopup(anchor);
-		String[] names = {"Name", "Size", "Modified"};
-		int[] values = {0, 2, 1};
+		String[] names = { "Name", "Size", "Modified" };
+		int[] values = { 0, 2, 1 };
 		int selected = prefs.getInt("sortBy", 0);
 		for (int i = 0; i < names.length; i++) {
 			android.view.MenuItem item = popup.getMenu().add(0, values[i], i, names[i]);
@@ -1673,10 +1666,20 @@ public class MainActivity extends Activity {
 		final int seq = ++navSeq;
 		loadBar.setVisibility(View.VISIBLE);
 		final TeraClient c = client;
-		exec.execute(new Runnable() {
+		navigationExec.execute(new Runnable() {
 			public void run() {
 				try {
-					final JSONObject r = c.listAll(dir);
+					JSONObject response;
+					try { response = c.listAll(dir); }
+					catch (java.io.IOException first) {
+						if (seq != navSeq || Thread.currentThread().isInterrupted()) return;
+						try { Thread.sleep(350); } catch (InterruptedException interrupted) {
+							Thread.currentThread().interrupt(); return;
+						}
+						if (seq != navSeq) return;
+						response = c.listAll(dir);
+					}
+					final JSONObject r = response;
 					final int errno = r.optInt("errno", 0);
 					final ArrayList<TeraEntry> list = new ArrayList<TeraEntry>();
 					if (errno == 0 && r.optJSONArray("list") != null) {
@@ -1684,7 +1687,7 @@ public class MainActivity extends Activity {
 							list.add(TeraEntry.from(r.optJSONArray("list").getJSONObject(i)));
 						sortList(list);
 					}
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							if (seq != navSeq || client != c)
 								return;
@@ -1701,17 +1704,21 @@ public class MainActivity extends Activity {
 							curDir = dir;
 							entries = list;
 							cache.put(dir, list);
+							if (cache.size() > 30) {
+								String victim = null;
+								for (String key : cache.keySet()) if (!key.equals(dir)) { victim = key; break; }
+								if (victim != null) cache.remove(victim);
+							}
 							adapter.setData(entries);
 							updateTitle();
 							onSelChanged();
-							saveSession(null);
 							if (quotaText.length() == 0)
 								refreshQuota();
 							warmUp();
 						}
 					});
 				} catch (final Exception e) {
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							if (seq != navSeq)
 								return;
@@ -1728,14 +1735,14 @@ public class MainActivity extends Activity {
 		final TeraClient c = client;
 		if (c == null)
 			return;
-		exec.execute(new Runnable() {
+		metadataExec.execute(new Runnable() {
 			public void run() {
 				try {
 					JSONObject q = c.getQuota();
 					if (q.optInt("errno", -1) != 0)
 						return;
 					final String s = human(q.optLong("used")) + " / " + human(q.optLong("total"));
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							quotaText = s;
 							updateTitle();
@@ -1768,10 +1775,11 @@ public class MainActivity extends Activity {
 		return "\uD83D\uDCC4";
 	}
 
+	// Used on the UI thread only; SimpleDateFormat is not thread-safe.
+	final SimpleDateFormat rowDateFormat = new SimpleDateFormat("MM/dd/yyyy h:mm a", Locale.getDefault());
 	String describe(TeraEntry e) {
 		String when = e.mtime > 0
-				? new SimpleDateFormat("MM/dd/yyyy h:mm a", Locale.getDefault()).format(new Date(e.mtime * 1000))
-				: "";
+				? rowDateFormat.format(new Date(e.mtime * 1000)) : "";
 		String lead = e.isDir ? "Folder" : human(e.size);
 		return lead + (when.length() > 0 ? " \u00B7 " + when : "");
 	}
@@ -1790,24 +1798,24 @@ public class MainActivity extends Activity {
 			public boolean onMenuItemClick(android.view.MenuItem item) {
 				ArrayList<TeraEntry> chosen = selectedEntries();
 				switch (item.getItemId()) {
-					case 1 :
-						confirmDelete(chosen);
-						break;
-					case 2 :
-						archiveEntries(chosen, false);
-						break;
-					case 3 :
-						archiveEntries(chosen, true);
-						break;
-					case 4 :
-						copyMoveTo(chosen, false);
-						break;
-					case 5 :
-						copyMoveTo(chosen, true);
-						break;
-					case 6 :
-						downloadEntries(chosen);
-						break;
+				case 1:
+					confirmDelete(chosen);
+					break;
+				case 2:
+					archiveEntries(chosen, false);
+					break;
+				case 3:
+					archiveEntries(chosen, true);
+					break;
+				case 4:
+					copyMoveTo(chosen, false);
+					break;
+				case 5:
+					copyMoveTo(chosen, true);
+					break;
+				case 6:
+					downloadEntries(chosen);
+					break;
 				}
 				return true;
 			}
@@ -1833,32 +1841,32 @@ public class MainActivity extends Activity {
 		pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
 			public boolean onMenuItemClick(android.view.MenuItem item) {
 				switch (item.getItemId()) {
-					case 1 :
-						askCreate();
-						break;
-					case 2 :
-						pickUploads();
-						break;
-					case 8 :
-						pickUploadFolder();
-						break;
-					case 3 :
-						askSearch();
-						break;
-					case 4 :
-						showTrash();
-						break;
-					case 5 :
-						showShares();
-						break;
-					case 6 :
-						showSettings();
-						break;
-					case 9 :
-						showCookieDialog(false);
-						break;
-					default :
-						signOut(null);
+				case 1:
+					askCreate();
+					break;
+				case 2:
+					pickUploads();
+					break;
+				case 8:
+					pickUploadFolder();
+					break;
+				case 3:
+					askSearch();
+					break;
+				case 4:
+					showTrash();
+					break;
+				case 5:
+					showShares();
+					break;
+				case 6:
+					showSettings();
+					break;
+				case 9:
+					showCookieDialog(false);
+					break;
+				default:
+					signOut(null);
 				}
 				return true;
 			}
@@ -2019,8 +2027,7 @@ public class MainActivity extends Activity {
 			pm.getMenu().add(0, 12, 5, "Untar");
 			pm.getMenu().add(0, 13, 5, "Untar to folder");
 		}
-		if (canPreview(e))
-			pm.getMenu().add(0, 15, 0, "View");
+		if (canPreview(e)) pm.getMenu().add(0, 15, 0, "View");
 		pm.getMenu().add(0, 7, 6, "Download");
 		pm.getMenu().add(0, 8, 7, "Share link");
 		pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
@@ -2028,46 +2035,46 @@ public class MainActivity extends Activity {
 				ArrayList<TeraEntry> one = new ArrayList<TeraEntry>();
 				one.add(e);
 				switch (item.getItemId()) {
-					case 1 :
-						confirmDelete(one);
-						break;
-					case 2 :
-						askRename(e);
-						break;
-					case 3 :
-						copyMoveTo(one, false);
-						break;
-					case 4 :
-						copyMoveTo(one, true);
-						break;
-					case 5 :
-						archiveEntries(one, false);
-						break;
-					case 6 :
-						archiveEntries(one, true);
-						break;
-					case 7 :
-						downloadEntries(one);
-						break;
-					case 8 :
-						createShare(e);
-						break;
-					case 15 :
-						viewEntry(e);
-						break;
-					case 14 :
-						editEntry(e);
-						break;
-					case 10 :
-					case 12 :
-						confirmExtract(e, false);
-						break;
-					case 11 :
-					case 13 :
-						runExtract(e, true);
-						break;
-					default :
-						showEntryDialog(e);
+				case 1:
+					confirmDelete(one);
+					break;
+				case 2:
+					askRename(e);
+					break;
+				case 3:
+					copyMoveTo(one, false);
+					break;
+				case 4:
+					copyMoveTo(one, true);
+					break;
+				case 5:
+					archiveEntries(one, false);
+					break;
+				case 6:
+					archiveEntries(one, true);
+					break;
+				case 7:
+					downloadEntries(one);
+					break;
+				case 8:
+					createShare(e);
+					break;
+				case 15:
+					viewEntry(e);
+					break;
+				case 14:
+					editEntry(e);
+					break;
+				case 10:
+				case 12:
+					confirmExtract(e, false);
+					break;
+				case 11:
+				case 13:
+					runExtract(e, true);
+					break;
+				default:
+					showEntryDialog(e);
 				}
 				return true;
 			}
@@ -2076,47 +2083,44 @@ public class MainActivity extends Activity {
 	}
 
 	boolean canPreview(TeraEntry e) {
-		if (e.isDir || e.name == null)
-			return false;
-		String n = e.name.toLowerCase(Locale.US);
-		return n.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|mp4|mkv|webm|mov|avi|3gp|pdf)$");
-	}
+        if (e.isDir || e.name == null) return false;
+        String n = e.name.toLowerCase(Locale.US);
+        return n.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|mp4|mkv|webm|mov|avi|3gp|pdf)$");
+    }
 
-	void viewEntry(final TeraEntry e) {
-		if (client == null)
-			return;
-		final TeraClient c = client;
-		final File dir = new File(getCacheDir(), "previews");
-		dir.mkdirs();
-		final File local = new File(dir, System.nanoTime() + "_" + TeraWork.safeSegment(e.name));
-		final JobStatus st = new JobStatus("Opening " + e.name);
-		execDl.execute(new Runnable() {
-			public void run() {
-				String error = null;
-				try {
-					c.downloadEntry(e.path, e.fsId, local, e.size, st);
-				} catch (Exception ex) {
-					error = ex.getMessage() == null ? ex.toString() : ex.getMessage();
-					local.delete();
-				}
-				st.close();
-				final String failure = error;
-				runOnUiThread(new Runnable() {
-					public void run() {
-						if (failure != null) {
-							if (!"Cancelled".equals(failure))
-								showError(failure);
-							return;
-						}
-						Intent intent = new Intent(MainActivity.this, PreviewActivity.class);
-						intent.putExtra("path", local.getAbsolutePath());
-						intent.putExtra("name", e.name);
-						startActivity(intent);
-					}
-				});
-			}
-		});
-	}
+    void viewEntry(final TeraEntry e) {
+        if (client == null) return;
+        final TeraClient c = client;
+        final File dir = new File(getCacheDir(), "previews");
+        dir.mkdirs();
+        final File local = new File(dir, System.nanoTime() + "_" + TeraWork.safeSegment(e.name));
+        final JobStatus st = new JobStatus("Opening " + e.name);
+        execDl.execute(new Runnable() {
+            public void run() {
+                String error = null;
+                try {
+                    c.downloadEntry(e.path, e.fsId, local, e.size, st);
+                } catch (Exception ex) {
+                    error = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+                    local.delete();
+                }
+                st.close();
+                final String failure = error;
+                postIfAlive(new Runnable() {
+                    public void run() {
+                        if (failure != null) {
+                            if (!"Cancelled".equals(failure)) showError(failure);
+                            return;
+                        }
+                        Intent intent = new Intent(MainActivity.this, PreviewActivity.class);
+                        intent.putExtra("path", local.getAbsolutePath());
+                        intent.putExtra("name", e.name);
+                        startActivity(intent);
+                    }
+                });
+            }
+        });
+    }
 
 	/** Download a text file to the cache and open it in the editor. */
 	void editEntry(final TeraEntry e) {
@@ -2153,14 +2157,17 @@ public class MainActivity extends Activity {
 						for (int i = 0; i < b.length && i < 8000; i++)
 							if (b[i] == 0)
 								throw new Exception("This looks like a binary file, not text");
-						text = new String(b, "UTF-8");
+						java.nio.charset.CharsetDecoder decoder = java.nio.charset.Charset.forName("UTF-8").newDecoder()
+							.onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+							.onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+						text = decoder.decode(java.nio.ByteBuffer.wrap(b)).toString();
 					}
 				} catch (Exception ex) {
 					err = ex.getMessage() == null ? ex.toString() : ex.getMessage();
 				}
 				st.close();
 				final String ferr = err, ftext = text;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						if (ferr != null) {
 							local.delete();
@@ -2277,8 +2284,7 @@ public class MainActivity extends Activity {
 						}
 						runJob("Renaming...", new Job() {
 							public String run(TeraClient c) throws Exception {
-								JSONArray l = new JSONArray()
-										.put(new JSONObject().put("path", e.path).put("newname", nn));
+								JSONArray l = new JSONArray().put(new JSONObject().put("path", e.path).put("newname", nn));
 								return chk(c.fileManager("rename", l), "Rename");
 							}
 						}, afterFilesChange);
@@ -2316,7 +2322,7 @@ public class MainActivity extends Activity {
 
 	/** dialog to choose a TeraBox folder */
 	void pickFolder(String title, String start, final FolderCb cb) {
-		final String[] cur = new String[]{start};
+		final String[] cur = new String[] { start };
 		final ArrayList<String[]> rows = new ArrayList<String[]>(); // {label, path}
 		final ArrayList<String> labels = new ArrayList<String>();
 		LinearLayout box = new LinearLayout(this);
@@ -2324,7 +2330,7 @@ public class MainActivity extends Activity {
 		final TextView pathView = mkText("", 13, MUTED);
 		final View[] upBtn = new View[1];
 		final Runnable[] loader = new Runnable[1];
-		final String[] target = new String[]{start};
+		final String[] target = new String[] { start };
 		box.addView(pickerHeader(pathView, new View.OnClickListener() {
 			public void onClick(View v) {
 				target[0] = "/";
@@ -2370,8 +2376,8 @@ public class MainActivity extends Activity {
 							}
 							sortList(folders);
 							for (int i = 0; i < folders.size(); i++)
-								nr.add(new String[]{folders.get(i).name, folders.get(i).path});
-							runOnUiThread(new Runnable() {
+								nr.add(new String[] { folders.get(i).name, folders.get(i).path });
+							postIfAlive(new Runnable() {
 								public void run() {
 									cur[0] = dir;
 									rows.clear();
@@ -2385,7 +2391,7 @@ public class MainActivity extends Activity {
 								}
 							});
 						} catch (final Exception e) {
-							runOnUiThread(new Runnable() {
+							postIfAlive(new Runnable() {
 								public void run() {
 									pathView.setText("Could not load: " + e.getMessage());
 								}
@@ -2415,10 +2421,8 @@ public class MainActivity extends Activity {
 	void copyMoveTo(final ArrayList<TeraEntry> items, final boolean move) {
 		if (items.isEmpty())
 			return;
-		pickFolder(
-				(move ? "Move" : "Copy") + " "
-						+ (items.size() == 1 ? "\"" + items.get(0).name + "\"" : items.size() + " items") + " to...",
-				curDir, new FolderCb() {
+		pickFolder((move ? "Move" : "Copy") + " " + (items.size() == 1 ? "\"" + items.get(0).name + "\"" : items.size() + " items")
+				+ " to...", curDir, new FolderCb() {
 					public void picked(final String dest) {
 						final ArrayList<TeraEntry> todo = new ArrayList<TeraEntry>();
 						for (int i = 0; i < items.size(); i++) {
@@ -2484,9 +2488,7 @@ public class MainActivity extends Activity {
 					String nn = e.name;
 					if (!move && parentOf(e.path).equals(dest) && ondup.length() == 0) {
 						int dot = nn.lastIndexOf('.');
-						nn = dot > 0 && !e.isDir
-								? nn.substring(0, dot) + " - Copy" + nn.substring(dot)
-								: nn + " - Copy";
+						nn = dot > 0 && !e.isDir ? nn.substring(0, dot) + " - Copy" + nn.substring(dot) : nn + " - Copy";
 					}
 					l.put(new JSONObject().put("path", e.path).put("dest", dest).put("newname", nn));
 				}
@@ -2510,8 +2512,7 @@ public class MainActivity extends Activity {
 					JSONArray objs = new JSONArray(), plain = new JSONArray();
 					for (int i = 0; items != null && i < items.length(); i++) {
 						TeraEntry old = TeraEntry.from(items.getJSONObject(i));
-						if (old == null || !names.contains(old.name) || sources.contains(old.path)
-								|| old.path.equals("/"))
+						if (old == null || !names.contains(old.name) || sources.contains(old.path) || old.path.equals("/"))
 							continue; // never delete the item that is being moved itself
 						objs.put(new JSONObject().put("path", old.path));
 						plain.put(old.path);
@@ -2583,42 +2584,32 @@ public class MainActivity extends Activity {
 			public void run() {
 				String nn = in.getText().toString().trim();
 				String message = null;
-				if (nn.length() == 0)
-					message = "Enter a name";
+				if (nn.length() == 0) message = "Enter a name";
 				else if (nn.equals(".") || nn.equals("..") || nn.indexOf('/') >= 0 || nn.indexOf('\\') >= 0)
 					message = "Invalid file or folder name";
 				else {
 					for (TeraEntry e : entries) {
-						if (nn.equals(e.name)) {
-							message = "A file or folder with this name already exists";
-							break;
-						}
+						if (nn.equals(e.name)) { message = "A file or folder with this name already exists"; break; }
 					}
 				}
 				error.setTextColor(ERR);
 				error.setText(message == null ? "" : message);
 				error.setVisibility(message == null || nn.length() == 0 ? View.GONE : View.VISIBLE);
 				Button create = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
-				if (create != null)
-					create.setEnabled(message == null);
+				if (create != null) create.setEnabled(message == null);
 			}
 		};
 		in.addTextChangedListener(new TextWatcher() {
-			public void beforeTextChanged(CharSequence s, int start, int count, int after) {
-			}
-			public void onTextChanged(CharSequence s, int start, int before, int count) {
-				validate.run();
-			}
-			public void afterTextChanged(Editable e) {
-			}
+			public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+			public void onTextChanged(CharSequence s, int start, int before, int count) { validate.run(); }
+			public void afterTextChanged(Editable e) {}
 		});
 		dialog.show();
 		validate.run();
 		dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
 				validate.run();
-				if (!dialog.getButton(DialogInterface.BUTTON_POSITIVE).isEnabled())
-					return;
+				if (!dialog.getButton(DialogInterface.BUTTON_POSITIVE).isEnabled()) return;
 				final String nn = in.getText().toString().trim();
 				final boolean folder = rf.isChecked();
 				final String remote = (dirNow.equals("/") ? "" : dirNow) + "/" + nn;
@@ -2636,15 +2627,11 @@ public class MainActivity extends Activity {
 							JSONArray items = result.optJSONArray("list");
 							boolean duplicate = false;
 							for (int i = 0; i < items.length(); i++)
-								if (nn.equals(items.getJSONObject(i).optString("server_filename"))) {
-									duplicate = true;
-									break;
-								}
+								if (nn.equals(items.getJSONObject(i).optString("server_filename"))) { duplicate = true; break; }
 							final boolean exists = duplicate;
-							runOnUiThread(new Runnable() {
+							postIfAlive(new Runnable() {
 								public void run() {
-									if (!dialog.isShowing())
-										return;
+									if (!dialog.isShowing()) return;
 									if (exists) {
 										error.setTextColor(ERR);
 										error.setText("A file or folder with this name already exists");
@@ -2654,8 +2641,7 @@ public class MainActivity extends Activity {
 									dialog.dismiss();
 									runJob("Creating...", new Job() {
 										public String run(TeraClient c) throws Exception {
-											if (folder)
-												return chk(c.mkdir(remote), "Create folder");
+											if (folder) return chk(c.mkdir(remote), "Create folder");
 											c.uploadFile(emptyFile(), dirNow, nn, null);
 											return null;
 										}
@@ -2663,10 +2649,9 @@ public class MainActivity extends Activity {
 								}
 							});
 						} catch (final Exception ex) {
-							runOnUiThread(new Runnable() {
+							postIfAlive(new Runnable() {
 								public void run() {
-									if (!dialog.isShowing())
-										return;
+									if (!dialog.isShowing()) return;
 									error.setTextColor(ERR);
 									error.setText("Could not check name: " + ex.getMessage());
 									dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
@@ -2706,39 +2691,31 @@ public class MainActivity extends Activity {
 		navigation.setMinimumHeight(dp(BAR_TOP_DP + BAR_ROW_DP));
 		View home = iconButton("home", ACCENT, 14, 8);
 		home.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				openSearchFolder("/");
-			}
+			public void onClick(View v) { openSearchFolder("/"); }
 		});
 		navigation.addView(home);
 		HorizontalScrollView pathScroll = new HorizontalScrollView(this);
 		pathScroll.setHorizontalScrollBarEnabled(false);
 		LinearLayout pathItems = new LinearLayout(this);
 		pathItems.setGravity(Gravity.CENTER_VERTICAL);
-		if (scopeDir.equals("/"))
-			pathItems.addView(mkText("/", 17, TEXT));
+		if (scopeDir.equals("/")) pathItems.addView(mkText("/", 17, TEXT));
 		String[] pieces = scopeDir.split("/");
 		String accumulated = "";
 		for (int i = 0; i < pieces.length; i++) {
-			if (pieces[i].length() == 0)
-				continue;
+			if (pieces[i].length() == 0) continue;
 			accumulated += "/" + pieces[i];
 			final String destination = accumulated;
 			TextView crumb = mkText("/" + pieces[i], 17, TEXT);
 			crumb.setPadding(dp(3), dp(4), dp(3), dp(4));
 			crumb.setOnClickListener(new View.OnClickListener() {
-				public void onClick(View v) {
-					openSearchFolder(destination);
-				}
+				public void onClick(View v) { openSearchFolder(destination); }
 			});
 			pathItems.addView(crumb);
 		}
 		if (!scopeDir.equals("/")) {
 			View up = iconButton("updir", ACCENT, 10, 10);
 			up.setOnClickListener(new View.OnClickListener() {
-				public void onClick(View v) {
-					openSearchFolder(parentOf(scopeDir));
-				}
+				public void onClick(View v) { openSearchFolder(parentOf(scopeDir)); }
 			});
 			pathItems.addView(up); // right beside the path
 		}
@@ -2758,9 +2735,7 @@ public class MainActivity extends Activity {
 		scroll.addView(content);
 		root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
-		TextView scope = mkText(
-				"Search scope: TeraBox root" + (scopeDir.equals("/") ? "" : " " + scopeDir) + " and its subfolders", 15,
-				MUTED);
+		TextView scope = mkText("Search scope: TeraBox root" + (scopeDir.equals("/") ? "" : " " + scopeDir) + " and its subfolders", 15, MUTED);
 		content.addView(scope);
 		final EditText input = new EditText(this);
 		styleEdit(input, "Enter file or folder name");
@@ -2794,9 +2769,7 @@ public class MainActivity extends Activity {
 		cp.rightMargin = dp(6);
 		actions.addView(cancel, cp);
 		cancel.setOnClickListener(new View.OnClickListener() {
-			public void onClick(View v) {
-				showFiles();
-			}
+			public void onClick(View v) { showFiles(); }
 		});
 		final Button search = mkSmallBtn("⌕  Search", ACCENT);
 		LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -1);
@@ -2805,10 +2778,7 @@ public class MainActivity extends Activity {
 		search.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
 				String term = input.getText().toString().trim();
-				if (term.length() == 0) {
-					input.setError("Enter a file or folder name");
-					return;
-				}
+				if (term.length() == 0) { input.setError("Enter a file or folder name"); return; }
 				runSearch(term, exact.isChecked(), caseSensitive.isChecked());
 			}
 		});
@@ -2832,14 +2802,11 @@ public class MainActivity extends Activity {
 
 	void runSearch(final String term, final boolean exact, final boolean caseSensitive) {
 		final TeraClient c = client;
-		if (c == null)
-			return;
+		if (c == null) return;
 		final String base = curDir;
 		sel.clear();
-		if (screen == SCREEN_SEARCH && searchPageProgress != null)
-			searchPageProgress.setVisibility(View.VISIBLE);
-		else if (loadBar != null)
-			loadBar.setVisibility(View.VISIBLE);
+		if (screen == SCREEN_SEARCH && searchPageProgress != null) searchPageProgress.setVisibility(View.VISIBLE);
+		else if (loadBar != null) loadBar.setVisibility(View.VISIBLE);
 		final int seq = ++navSeq;
 		exec.execute(new Runnable() {
 			public void run() {
@@ -2850,63 +2817,45 @@ public class MainActivity extends Activity {
 					for (int page = 1; page <= 5; page++) {
 						JSONObject j = c.search(term, page);
 						errno = TeraClient.errnoOf(j);
-						if (errno != 0)
-							break;
+						if (errno != 0) break;
 						JSONArray list = j.optJSONArray("list");
 						int n = list == null ? 0 : list.length();
 						for (int i = 0; i < n; i++) {
 							TeraEntry e = TeraEntry.from(list.getJSONObject(i));
-							if (e.path.length() == 0)
-								continue;
-							if (!base.equals("/") && !e.path.startsWith(base + "/"))
-								continue;
+							if (e.path.length() == 0) continue;
+							if (!base.equals("/") && !e.path.startsWith(base + "/")) continue;
 							String name = caseSensitive ? e.name : e.name.toLowerCase(Locale.US);
 							String needle = caseSensitive ? term : term.toLowerCase(Locale.US);
-							if (exact ? name.equals(needle) : name.contains(needle))
-								out.add(e);
+							if (exact ? name.equals(needle) : name.contains(needle)) out.add(e);
 						}
-						if (n < 1000)
-							break;
+						if (n < 1000) break;
 					}
 					sortList(out);
 					final int fe = errno;
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
-							if (seq != navSeq)
-								return;
-							if (screen == SCREEN_SEARCH && searchPageProgress != null)
-								searchPageProgress.setVisibility(View.GONE);
-							else if (loadBar != null)
-								loadBar.setVisibility(View.INVISIBLE);
-							if (fe == -6) {
-								signOut("Your session expired. Please sign in again.");
-								return;
-							}
-							if (fe != 0) {
-								toast("Search failed (error " + fe + ")");
-								return;
-							}
+							if (seq != navSeq) return;
+							if (screen == SCREEN_SEARCH && searchPageProgress != null) searchPageProgress.setVisibility(View.GONE);
+							else if (loadBar != null) loadBar.setVisibility(View.INVISIBLE);
+							if (fe == -6) { signOut("Your session expired. Please sign in again."); return; }
+							if (fe != 0) { toast("Search failed (error " + fe + ")"); return; }
 							if (screen == SCREEN_SEARCH) {
 								showSearchResults(out);
 							} else {
 								searchTerm = term;
 								entries = out;
-								if (adapter != null)
-									adapter.setData(entries);
+								if (adapter != null) adapter.setData(entries);
 								updateTitle();
 								onSelChanged();
 							}
 						}
 					});
 				} catch (final Exception e) {
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
-							if (seq != navSeq)
-								return;
-							if (screen == SCREEN_SEARCH && searchPageProgress != null)
-								searchPageProgress.setVisibility(View.GONE);
-							else if (loadBar != null)
-								loadBar.setVisibility(View.INVISIBLE);
+							if (seq != navSeq) return;
+							if (screen == SCREEN_SEARCH && searchPageProgress != null) searchPageProgress.setVisibility(View.GONE);
+							else if (loadBar != null) loadBar.setVisibility(View.INVISIBLE);
 							toast("Search failed: " + e.getMessage());
 						}
 					});
@@ -2916,8 +2865,7 @@ public class MainActivity extends Activity {
 	}
 
 	void showSearchResults(final ArrayList<TeraEntry> results) {
-		if (searchResultsContainer == null)
-			return;
+		if (searchResultsContainer == null) return;
 		searchResultsContainer.removeAllViews();
 		TextView title = mkText("Search results (" + results.size() + ")", 16, MUTED);
 		title.setPadding(dp(2), dp(2), dp(2), dp(6));
@@ -2943,9 +2891,7 @@ public class MainActivity extends Activity {
 			location.setPadding(dp(32), dp(1), 0, dp(1));
 			location.setTextColor(ACCENT);
 			location.setOnClickListener(new View.OnClickListener() {
-				public void onClick(View v) {
-					openSearchFolder(parentOf(e.path));
-				}
+				public void onClick(View v) { openSearchFolder(parentOf(e.path)); }
 			});
 			card.addView(location);
 			card.setOnClickListener(new View.OnClickListener() {
@@ -3048,7 +2994,7 @@ public class MainActivity extends Activity {
 	 */
 	void showLocalPicker(final boolean foldersOnly, final FilesCb cb) {
 		final File top = Environment.getExternalStorageDirectory();
-		final File[] cur = new File[]{top};
+		final File[] cur = new File[] { top };
 		final ArrayList<LRow> rows = new ArrayList<LRow>();
 		final java.util.LinkedHashSet<String> picked = new java.util.LinkedHashSet<String>();
 		final AlertDialog[] dlg = new AlertDialog[1];
@@ -3162,8 +3108,7 @@ public class MainActivity extends Activity {
 				File[] ls = dir.listFiles();
 				String parent = dir.getParent();
 				upBtn[0].setVisibility(parent != null && !dir.getPath().equals("/storage") && !dir.getPath().equals("/")
-						? View.VISIBLE
-						: View.GONE);
+						? View.VISIBLE : View.GONE);
 				if (ls == null) {
 					pathView.setText(dir.getPath() + "  (cannot read this folder)");
 				} else {
@@ -3221,8 +3166,7 @@ public class MainActivity extends Activity {
 				updateState.run();
 			}
 		});
-		AlertDialog.Builder b = new DragBuilder(this).setTitle(foldersOnly ? "Upload folder" : "Upload file")
-				.setView(box);
+		AlertDialog.Builder b = new DragBuilder(this).setTitle(foldersOnly ? "Upload folder" : "Upload file").setView(box);
 		b.setPositiveButton(foldersOnly ? "Select this folder" : "Upload file", new DialogInterface.OnClickListener() {
 			public void onClick(DialogInterface d, int w) {
 				ArrayList<File> out = new ArrayList<File>();
@@ -3263,28 +3207,21 @@ public class MainActivity extends Activity {
 			Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
 			i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
 			startActivityForResult(i, 22);
-		} catch (Exception e) {
-			toast("No folder picker available");
-		}
+		} catch (Exception e) { toast("No folder picker available"); }
 	}
 
 	protected void onActivityResult(int req, int res, Intent data) {
 		super.onActivityResult(req, res, data);
-		if (res != RESULT_OK || data == null)
-			return;
+		if (res != RESULT_OK || data == null) return;
 		if (req == 22) {
 			Uri tree = data.getData();
 			if (tree != null) {
-				try {
-					getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-				} catch (Exception ignored) {
-				}
+				try { getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Exception ignored) {}
 				uploadFolderTree(tree, uploadDir);
 			}
 			return;
 		}
-		if (req != 21)
-			return;
+		if (req != 21) return;
 		ArrayList<Uri> uris = new ArrayList<Uri>();
 		if (data.getClipData() != null) {
 			for (int i = 0; i < data.getClipData().getItemCount(); i++)
@@ -3300,67 +3237,47 @@ public class MainActivity extends Activity {
 		Uri uri;
 		String path;
 		boolean directory;
-		FolderItem(Uri u, String p, boolean d) {
-			uri = u;
-			path = p;
-			directory = d;
-		}
+		FolderItem(Uri u, String p, boolean d) { uri=u; path=p; directory=d; }
 	}
 
 	String safeFolderName(String name) {
-		if (name == null || name.length() == 0)
-			return "Folder";
+		if (name == null || name.length() == 0) return "Folder";
 		return name.replace('/', '_').replace('\\', '_');
 	}
 
 	String documentName(Uri uri) {
 		android.database.Cursor cursor = null;
 		try {
-			cursor = getContentResolver().query(uri, new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null,
-					null, null);
-			if (cursor != null && cursor.moveToFirst())
-				return safeFolderName(cursor.getString(0));
-		} catch (Exception ignored) {
-		} finally {
-			if (cursor != null)
-				cursor.close();
-		}
+			cursor = getContentResolver().query(uri, new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
+			if (cursor != null && cursor.moveToFirst()) return safeFolderName(cursor.getString(0));
+		} catch (Exception ignored) {} finally { if (cursor != null) cursor.close(); }
 		return "Folder";
 	}
 
 	void scanFolder(Uri tree, String docId, String relative, ArrayList<FolderItem> out, JobStatus st) throws Exception {
-		if (st.cancelled())
-			throw new Exception("Cancelled");
+		if (st.cancelled()) throw new Exception("Cancelled");
 		Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
 		android.database.Cursor cursor = getContentResolver().query(children,
-				new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-						DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE},
-				null, null, null);
-		if (cursor == null)
-			throw new Exception("Cannot read selected folder");
+			new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE }, null, null, null);
+		if (cursor == null) throw new Exception("Cannot read selected folder");
 		try {
 			while (cursor.moveToNext()) {
-				if (st.cancelled())
-					throw new Exception("Cancelled");
+				if (st.cancelled()) throw new Exception("Cancelled");
 				String id = cursor.getString(0);
 				String name = safeFolderName(cursor.getString(1));
 				boolean folder = DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(2));
 				Uri uri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
 				String path = relative + "/" + name;
 				out.add(new FolderItem(uri, path, folder));
-				if (folder)
-					scanFolder(tree, id, path, out, st);
+				if (folder) scanFolder(tree, id, path, out, st);
 			}
-		} finally {
-			cursor.close();
-		}
+		} finally { cursor.close(); }
 	}
 
 	void uploadFolderTree(final Uri tree, final String destination) {
 		ArrayList<String> names = new ArrayList<String>();
 		try {
-			names.add(documentName(
-					DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))));
+			names.add(documentName(DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))));
 		} catch (Exception e) {
 		}
 		checkUploadDup(destination, names, true, new DupAsk() {
@@ -3372,8 +3289,7 @@ public class MainActivity extends Activity {
 
 	void uploadFolderTreeRun(final Uri tree, final String destination, final DupPlan plan) {
 		final TeraClient c = client;
-		if (c == null)
-			return;
+		if (c == null) return;
 		final JobStatus st = new JobStatus("Uploading folder", true);
 		st.insideApp = true;
 		activeFolderUpload = st;
@@ -3384,75 +3300,48 @@ public class MainActivity extends Activity {
 				String error = null;
 				File temp = new File(getCacheDir(), "folder-upload-" + System.nanoTime());
 				try {
-					String rootName = chooseRoot(c, destination, documentName(DocumentsContract
-							.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))), plan);
+					String rootName = chooseRoot(c, destination, documentName(DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))), plan);
 					ArrayList<FolderItem> items = new ArrayList<FolderItem>();
 					st.message("Scanning " + rootName);
 					scanFolder(tree, DocumentsContract.getTreeDocumentId(tree), "", items, st);
 					String rootPath = (destination.equals("/") ? "" : destination) + "/" + rootName;
 					ensureRemoteFolder(c, rootPath, plan);
 					int total = 0;
-					for (FolderItem it : items)
-						if (!it.directory)
-							total++;
+					for (FolderItem it : items) if (!it.directory) total++;
 					for (FolderItem it : items) {
-						if (st.cancelled())
-							throw new Exception("Cancelled");
+						if (st.cancelled()) throw new Exception("Cancelled");
 						String remote = rootPath + it.path;
-						if (it.directory) {
-							ensureRemoteFolder(c, remote, plan);
-							continue;
-						}
+						if (it.directory) { ensureRemoteFolder(c, remote, plan); continue; }
 						int slash = remote.lastIndexOf('/');
 						String parent = remote.substring(0, slash);
 						String filename = remote.substring(slash + 1);
 						st.message("(" + (uploaded + 1) + "/" + total + ") " + it.path + "\nPreparing...");
 						InputStream in = getContentResolver().openInputStream(it.uri);
-						if (in == null)
-							throw new Exception("Cannot open " + it.path);
+						if (in == null) throw new Exception("Cannot open " + it.path);
 						FileOutputStream out = new FileOutputStream(temp);
 						try {
-							byte[] buffer = new byte[65536];
-							int n;
+							byte[] buffer = new byte[65536]; int n;
 							while ((n = in.read(buffer)) != -1) {
-								if (st.cancelled())
-									throw new Exception("Cancelled");
+								if (st.cancelled()) throw new Exception("Cancelled");
 								out.write(buffer, 0, n);
 							}
-						} finally {
-							out.close();
-							in.close();
-						}
+						} finally { out.close(); in.close(); }
 						st.message("(" + (uploaded + 1) + "/" + total + ") " + it.path);
 						c.uploadFile(temp, parent, resolveName(c, parent, filename, plan), st);
-						temp.delete();
-						uploaded++;
+						temp.delete(); uploaded++;
 					}
-				} catch (Exception e) {
-					error = e.getMessage() == null ? e.toString() : e.getMessage();
-				} finally {
-					temp.delete();
-				}
+				} catch (Exception e) { error = e.getMessage() == null ? e.toString() : e.getMessage(); }
+				finally { temp.delete(); }
 				st.finish(error, uploaded + " file(s) uploaded");
 				final String result = error;
 				final int count = uploaded;
-				runOnUiThread(new Runnable() {
-					public void run() {
-						cache.clear();
-						afterFilesChange.run();
-						if (result == null)
-							toast(count + " file(s) uploaded");
-						else if ("Cancelled".equals(result))
-							toast("Folder upload cancelled (" + count + " done)");
-						else
-							showErrorResume("Folder upload stopped after " + count + " file(s):\n" + result,
-									new Runnable() {
-										public void run() {
-											uploadFolderTreeRun(tree, destination, plan);
-										}
-									});
-					}
-				});
+				postIfAlive(new Runnable() { public void run() {
+					cache.clear(); afterFilesChange.run();
+					if (result == null) toast(count + " file(s) uploaded");
+					else if ("Cancelled".equals(result)) toast("Folder upload cancelled (" + count + " done)");
+					else showErrorResume("Folder upload stopped after " + count + " file(s):\n" + result,
+						new Runnable() { public void run() { uploadFolderTreeRun(tree, destination, plan); } });
+				} });
 			}
 		});
 	}
@@ -3493,7 +3382,7 @@ public class MainActivity extends Activity {
 				st.finish(err, ok + " file(s) uploaded");
 				final int fok = ok;
 				final String ferr = err;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						cache.clear();
 						afterFilesChange.run();
@@ -3504,8 +3393,7 @@ public class MainActivity extends Activity {
 						else
 							showErrorResume("Upload stopped after " + fok + " file(s):\n" + ferr, new Runnable() {
 								public void run() {
-									uploadLocalFilesRun(new ArrayList<File>(files.subList(fok, files.size())), dir,
-											plan);
+									uploadLocalFilesRun(new ArrayList<File>(files.subList(fok, files.size())), dir, plan);
 								}
 							});
 					}
@@ -3528,10 +3416,10 @@ public class MainActivity extends Activity {
 				throw new Exception("Cancelled");
 			String path = rel + "/" + safeFolderName(ls[i].getName());
 			if (ls[i].isDirectory()) {
-				out.add(new Object[]{ls[i], path, Boolean.TRUE});
+				out.add(new Object[] { ls[i], path, Boolean.TRUE });
 				scanLocal(ls[i], path, out, st);
 			} else if (ls[i].isFile()) {
-				out.add(new Object[]{ls[i], path, Boolean.FALSE});
+				out.add(new Object[] { ls[i], path, Boolean.FALSE });
 			}
 		}
 	}
@@ -3590,7 +3478,7 @@ public class MainActivity extends Activity {
 				st.finish(error, uploaded + " file(s) uploaded");
 				final String result = error;
 				final int count = uploaded;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						cache.clear();
 						afterFilesChange.run();
@@ -3599,12 +3487,11 @@ public class MainActivity extends Activity {
 						else if ("Cancelled".equals(result))
 							toast("Folder upload cancelled (" + count + " done)");
 						else
-							showErrorResume("Folder upload stopped after " + count + " file(s):\n" + result,
-									new Runnable() {
-										public void run() {
-											uploadLocalFolderRun(root, destination, plan);
-										}
-									});
+							showErrorResume("Folder upload stopped after " + count + " file(s):\n" + result, new Runnable() {
+								public void run() {
+									uploadLocalFolderRun(root, destination, plan);
+								}
+							});
 					}
 				});
 			}
@@ -3758,7 +3645,7 @@ public class MainActivity extends Activity {
 				for (int i = 0; i < names.size(); i++)
 					if (have.containsKey(names.get(i)) && !clash.contains(names.get(i)))
 						clash.add(names.get(i));
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						if (clash.isEmpty()) {
 							cb.go(plan);
@@ -3766,11 +3653,10 @@ public class MainActivity extends Activity {
 						}
 						String what;
 						if (clash.size() == 1)
-							what = (folder ? "The folder \"" : "\"") + clash.get(0) + "\" already exists in " + dir
-									+ ".";
+							what = (folder ? "The folder \"" : "\"") + clash.get(0) + "\" already exists in " + dir + ".";
 						else
-							what = clash.size() + " items already exist in " + dir + " (" + clash.get(0) + ", "
-									+ clash.get(1) + (clash.size() > 2 ? ", ..." : "") + ").";
+							what = clash.size() + " items already exist in " + dir + " (" + clash.get(0) + ", " + clash.get(1)
+									+ (clash.size() > 2 ? ", ..." : "") + ").";
 						new DragBuilder(MainActivity.this).setTitle("Already exists")
 								.setMessage(what + "\nWhat should happen to them?")
 								.setPositiveButton("Overwrite", new DialogInterface.OnClickListener() {
@@ -3907,7 +3793,7 @@ public class MainActivity extends Activity {
 				st.finish(err, ok + " file(s) uploaded");
 				final int fok = ok;
 				final String ferr = err;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						cache.clear();
 						afterFilesChange.run();
@@ -3943,8 +3829,7 @@ public class MainActivity extends Activity {
 				try {
 					local = TeraWork.makeArchive(c, items, tar, new File(getCacheDir(), "arch"), st);
 					String stamp = new SimpleDateFormat("yyMMdd_HHmmss", Locale.US).format(new Date());
-					finalName = (items.size() == 1 ? items.get(0).name : "archive") + "_" + stamp
-							+ (tar ? ".tar" : ".zip");
+					finalName = (items.size() == 1 ? items.get(0).name : "archive") + "_" + stamp + (tar ? ".tar" : ".zip");
 					st.message("Uploading " + finalName);
 					c.uploadFile(local, dir, finalName, st);
 				} catch (Exception e) {
@@ -3955,7 +3840,7 @@ public class MainActivity extends Activity {
 				}
 				st.finish(err, "Created " + finalName);
 				final String ferr = err, fname = finalName;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						cache.clear();
 						afterFilesChange.run();
@@ -3976,8 +3861,7 @@ public class MainActivity extends Activity {
 	void confirmExtract(final TeraEntry e, final boolean toFolder) {
 		String verb = TeraWork.isZipName(e.name) ? "Unzip" : "Untar";
 		new DragBuilder(this).setTitle(verb)
-				.setMessage("Extract \"" + e.name + "\" into " + parentOf(e.path)
-						+ "?\nFiles with the same name are replaced.")
+				.setMessage("Extract \"" + e.name + "\" into " + parentOf(e.path) + "?\nFiles with the same name are replaced.")
 				.setPositiveButton("Extract", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						runExtract(e, toFolder);
@@ -4002,16 +3886,14 @@ public class MainActivity extends Activity {
 				st.finish(err, res == null ? null : res.files + " file(s) unpacked");
 				final TeraWork.ExtractResult fr = res;
 				final String ferr = err;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						cache.clear();
 						afterFilesChange.run();
 						if (ferr == null) {
-							new DragBuilder(MainActivity.this).setTitle("Extracted").setMessage(fr.files + " file(s), "
-									+ fr.dirs + " folder(s) into\n" + fr.destDir
-									+ (fr.skipped > 0
-											? "\n\n" + fr.skipped + " unsafe or unsupported entries were skipped."
-											: ""))
+							new DragBuilder(MainActivity.this).setTitle("Extracted")
+									.setMessage(fr.files + " file(s), " + fr.dirs + " folder(s) into\n" + fr.destDir
+											+ (fr.skipped > 0 ? "\n\n" + fr.skipped + " unsafe or unsupported entries were skipped." : ""))
 									.setPositiveButton("OK", null).show();
 						} else if (ferr.equals("Cancelled")) {
 							toast("Cancelled - files already unpacked stay in TeraBox");
@@ -4053,8 +3935,7 @@ public class MainActivity extends Activity {
 					if (url.length() == 0) {
 						ArrayList<TeraShares.Share> all = TeraShares.fetchAll(c, cancelledShares);
 						for (int i = 0; i < all.size(); i++)
-							if (all.get(i).path.length() > 0
-									&& ("/" + all.get(i).path.replaceAll("^/+", "")).equals(e.path))
+							if (all.get(i).path.length() > 0 && ("/" + all.get(i).path.replaceAll("^/+", "")).equals(e.path))
 								url = all.get(i).url;
 					}
 					if (url.length() == 0)
@@ -4063,7 +3944,7 @@ public class MainActivity extends Activity {
 					err = ex.getMessage() == null ? ex.toString() : ex.getMessage();
 				}
 				final String furl = url, ferr = err;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						pd.dismiss();
 						if (ferr != null) {
@@ -4101,8 +3982,7 @@ public class MainActivity extends Activity {
 
 	File downloadDir() {
 		try {
-			File d = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-					"TeraBox");
+			File d = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "TeraBox");
 			d.mkdirs();
 			if (!d.isDirectory())
 				return null;
@@ -4137,8 +4017,8 @@ public class MainActivity extends Activity {
 				startActivity(new Intent("android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION"));
 			}
 		} else if (Build.VERSION.SDK_INT >= 23) {
-			requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE",
-					"android.permission.WRITE_EXTERNAL_STORAGE"}, 7);
+			requestPermissions(new String[] { "android.permission.READ_EXTERNAL_STORAGE",
+					"android.permission.WRITE_EXTERNAL_STORAGE" }, 7);
 		}
 	}
 
@@ -4147,8 +4027,8 @@ public class MainActivity extends Activity {
 			return;
 		final File dir = downloadDir();
 		if (dir == null) {
-			new DragBuilder(this).setTitle("Storage access needed").setMessage(
-					"TeraFiles saves downloads to Download/TeraBox. Allow access to files first, then download again.")
+			new DragBuilder(this).setTitle("Storage access needed")
+					.setMessage("TeraFiles saves downloads to Download/TeraBox. Allow access to files first, then download again.")
 					.setPositiveButton("Allow", new DialogInterface.OnClickListener() {
 						public void onClick(DialogInterface d, int w) {
 							requestAccess();
@@ -4170,13 +4050,12 @@ public class MainActivity extends Activity {
 				st.finish(err, files + " file(s) saved to " + dir.getAbsolutePath());
 				final int ff = files;
 				final String ferr = err;
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						saveSession(null);
 						if (ferr == null)
 							new DragBuilder(MainActivity.this).setTitle("Download finished")
-									.setMessage(ff + " file(s) saved to\n" + dir.getAbsolutePath())
-									.setPositiveButton("OK", null).show();
+									.setMessage(ff + " file(s) saved to\n" + dir.getAbsolutePath()).setPositiveButton("OK", null).show();
 						else if (ferr.equals("Cancelled"))
 							toast("Download cancelled");
 						else
@@ -4224,7 +4103,7 @@ public class MainActivity extends Activity {
 	}
 
 	View checkMark(boolean on) {
-		TextView c = mkText("\u2713", 20, 0xFF2D6AA0);
+		TextView c = mkText("\u2713", 20, BRAND_BLUE);
 		c.setTypeface(null, android.graphics.Typeface.BOLD);
 		c.setVisibility(on ? View.VISIBLE : View.INVISIBLE);
 		return c;
@@ -4261,9 +4140,9 @@ public class MainActivity extends Activity {
 
 		// ---- theme
 		box.addView(settingsHeader("THEME"));
-		String[] tn = new String[]{"System default", "Light", "Dark"};
-		String[] ts = new String[]{"Follows your device's Light/Dark setting", "Always use the light theme",
-				"Always use the dark theme"};
+		String[] tn = new String[] { "System default", "Light", "Dark" };
+		String[] ts = new String[] { "Follows your device's Light/Dark setting", "Always use the light theme",
+				"Always use the dark theme" };
 		final int mode = prefs.getInt("theme", 0);
 		for (int i = 0; i < tn.length; i++) {
 			final int m = i;
@@ -4280,7 +4159,7 @@ public class MainActivity extends Activity {
 
 		// ---- sort
 		box.addView(settingsHeader("SORT"));
-		String[] sn = new String[]{"Name", "Date", "Size"};
+		String[] sn = new String[] { "Name", "Date", "Size" };
 		int sortBy = prefs.getInt("sortBy", 0);
 		for (int i = 0; i < sn.length; i++) {
 			final int by = i;
@@ -4359,14 +4238,14 @@ public class MainActivity extends Activity {
 				pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
 					public boolean onMenuItemClick(android.view.MenuItem item) {
 						switch (item.getItemId()) {
-							case 1 :
-								trashAct("restore");
-								break;
-							case 2 :
-								confirmTrashDelete();
-								break;
-							default :
-								confirmEmptyTrash();
+						case 1:
+							trashAct("restore");
+							break;
+						case 2:
+							confirmTrashDelete();
+							break;
+						default:
+							confirmEmptyTrash();
 						}
 						return true;
 					}
@@ -4523,7 +4402,7 @@ public class MainActivity extends Activity {
 						list.add(TeraEntry.from(arr.getJSONObject(i)));
 					sortList(list);
 					final int fe = errno;
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							if (screen != SCREEN_TRASH)
 								return;
@@ -4564,7 +4443,7 @@ public class MainActivity extends Activity {
 						}
 					});
 				} catch (final Exception e) {
-					runOnUiThread(new Runnable() {
+					postIfAlive(new Runnable() {
 						public void run() {
 							trashLoad.setVisibility(View.INVISIBLE);
 							toast("Could not read the trash: " + e.getMessage());
@@ -4663,10 +4542,10 @@ public class MainActivity extends Activity {
 		//hideBox.setTextColor(TEXT);
 		//hideBox.setChecked(prefs.getBoolean("hideInactive", false));
 		//hideBox.setOnClickListener(new View.OnClickListener() {
-		//public void onClick(View v) {
-		//prefs.edit().putBoolean("hideInactive", ((CheckBox) v).isChecked()).commit();
-		//loadShares();
-		//}
+			//public void onClick(View v) {
+				//prefs.edit().putBoolean("hideInactive", ((CheckBox) v).isChecked()).commit();
+				//loadShares();
+			//}
 		//});
 		LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-1, -2);
 		hl.leftMargin = dp(8);
@@ -4714,7 +4593,7 @@ public class MainActivity extends Activity {
 				u.setEllipsize(TextUtils.TruncateAt.MIDDLE);
 				col.addView(n);
 				col.addView(u);
-				col.setTag(new TextView[]{n, u});
+				col.setTag(new TextView[] { n, u });
 			} else {
 				col = (LinearLayout) cv;
 			}
@@ -4724,9 +4603,7 @@ public class MainActivity extends Activity {
 			h[0].setText(s.name);
 			setIcon(h[0], s.isDir ? "folder" : "file", s.isDir ? ACCENT : TEXT);
 			h[0].setTextColor(dead ? MUTED : TEXT);
-			h[1].setText((dead
-					? "Inactive (stopped or expired)   "
-					: s.state.equals("active") ? "Active   " : "Status unknown   ") + s.url);
+			h[1].setText((dead ? "Inactive (stopped or expired)   " : s.state.equals("active") ? "Active   " : "Status unknown   ") + s.url);
 			h[1].setTextColor(dead ? ERR : s.state.equals("active") ? OK : MUTED);
 			return col;
 		}
@@ -4761,17 +4638,14 @@ public class MainActivity extends Activity {
 		final int generation = ++shareLoadGeneration;
 		shareLoad.setVisibility(View.VISIBLE);
 		// Keep the previous results visible during refresh without a persistent Loading row.
-		shareInfo.setText(shares.isEmpty()
-				? "Checking active shared links..."
-				: shares.size() + " active shared link(s). Tap one for options.");
+		shareInfo.setText(shares.isEmpty() ? "Checking active shared links..." : shares.size() + " active shared link(s). Tap one for options.");
 		execDl.execute(new Runnable() {
 			public void run() {
 				String err = null;
 				try {
 					TeraShares.load(c, cancelledShares, new TeraShares.Listener() {
-						public void update(final ArrayList<TeraShares.Share> active, final int pending,
-								final boolean done) {
-							runOnUiThread(new Runnable() {
+						public void update(final ArrayList<TeraShares.Share> active, final int pending, final boolean done) {
+							postIfAlive(new Runnable() {
 								public void run() {
 									if (screen != SCREEN_SHARES || generation != shareLoadGeneration)
 										return;
@@ -4779,12 +4653,10 @@ public class MainActivity extends Activity {
 									shareAdapter.notifyDataSetChanged();
 									if (done) {
 										shareLoad.setVisibility(View.INVISIBLE);
-										shareInfo.setText(active.isEmpty()
-												? "No active shared links found."
+										shareInfo.setText(active.isEmpty() ? "No active shared links found."
 												: active.size() + " active shared link(s). Tap one for options.");
 									} else {
-										shareInfo.setText(active.size() + " active shared link(s), checking " + pending
-												+ " more...");
+										shareInfo.setText(active.size() + " active shared link(s), checking " + pending + " more...");
 									}
 								}
 							});
@@ -4795,7 +4667,7 @@ public class MainActivity extends Activity {
 				}
 				final String ferr = err;
 				final String saved = TeraShares.exportCache();
-				runOnUiThread(new Runnable() {
+				postIfAlive(new Runnable() {
 					public void run() {
 						prefs.edit().putString("shareCache", saved).commit();
 						if (screen != SCREEN_SHARES || generation != shareLoadGeneration)
@@ -4821,30 +4693,27 @@ public class MainActivity extends Activity {
 						copyText("link", s.url);
 						toast("Link copied");
 					}
-				}).setNegativeButton(s.state.equals("cancelled") ? "Close" : "Stop sharing",
-						new DialogInterface.OnClickListener() {
-							public void onClick(DialogInterface d, int w) {
-								if (s.state.equals("cancelled"))
-									return;
-								runJob("Stopping the share...", new Job() {
-									public String run(TeraClient c) throws Exception {
-										ArrayList<String> ids = new ArrayList<String>();
-										ids.add(s.id);
-										String r = chk(c.shareCancel(ids), "Stop sharing");
-										if (r == null) {
-											cancelledShares.add(s.id);
-											TeraShares.remember(TeraShares.codeOf(s.url), "cancelled");
-										}
-										return r;
-									}
-								}, new Runnable() {
-									public void run() {
-										loadShares();
-									}
-								});
+}).setNegativeButton(s.state.equals("cancelled") ? "Close" : "Stop sharing", new DialogInterface.OnClickListener() {
+					public void onClick(DialogInterface d, int w) {
+						if (s.state.equals("cancelled"))
+							return;
+						runJob("Stopping the share...", new Job() {
+							public String run(TeraClient c) throws Exception {
+								ArrayList<String> ids = new ArrayList<String>();
+								ids.add(s.id);
+								String r = chk(c.shareCancel(ids), "Stop sharing");
+								if (r == null) {
+									cancelledShares.add(s.id);
+									TeraShares.remember(TeraShares.codeOf(s.url), "cancelled");
+								}
+								return r;
 							}
-						})
-				.show();
+						}, new Runnable() {
+							public void run() {
+								loadShares();
+							}
+						});
+					}
+				}).show();
 	}
 }
-
