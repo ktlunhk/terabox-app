@@ -703,7 +703,11 @@ public class TeraClient {
 				String contentType = c.getContentType();
 				if (contentType != null && (contentType.toLowerCase(java.util.Locale.US).contains("text/html") ||
 					contentType.toLowerCase(java.util.Locale.US).contains("application/json"))) {
-					throw new IOException("Download server returned " + contentType + " instead of file data (HTTP " + status + ").");
+					// A real .html / .json file is served with exactly that type, so only treat the
+					// response as an error page when its size is not the size of the file we asked for.
+					boolean sizeMatches = expectedSize > 0 && len >= 0 && len + have == expectedSize;
+					if (!sizeMatches)
+						throw new IOException("Download server returned " + contentType + " instead of file data (HTTP " + status + ").");
 				}
 				long total = len > 0 ? len + have : expectedSize;
 				InputStream in = c.getInputStream();
