@@ -28,6 +28,10 @@ public class PreviewActivity extends Activity {
     private VideoView video;
     private String path;
     @Override public void onCreate(Bundle b) {
+        if (!MainActivity.darkMode) { // follow the app's Light / Dark theme setting
+            int theme = getResources().getIdentifier("AppThemeLight", "style", getPackageName());
+            setTheme(theme != 0 ? theme : android.R.style.Theme_Material_Light_NoActionBar);
+        }
         super.onCreate(b);
         path=getIntent().getStringExtra("path");
         String name=getIntent().getStringExtra("name");
@@ -36,29 +40,22 @@ public class PreviewActivity extends Activity {
         String lower=name.toLowerCase(Locale.US);
         LinearLayout root=new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.BLACK);
-        float d=getResources().getDisplayMetrics().density;
-        LinearLayout bar=new LinearLayout(this);
-        bar.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        bar.setPadding(0,(int)(MainActivity.BAR_TOP_DP*d),0,0); // same height as the other title bars
-        TextView back=new TextView(this);back.setText("\u2190");back.setTextSize(22);back.setTextColor(Color.WHITE);back.setGravity(android.view.Gravity.CENTER);back.setPadding((int)(16*d),0,(int)(12*d),0);
-        back.setOnClickListener(new View.OnClickListener(){public void onClick(View v){finish();}});
-        bar.addView(back,new LinearLayout.LayoutParams(-2,(int)(MainActivity.BAR_ROW_DP*d)));
-        TextView title=new TextView(this);title.setText(name);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);title.setTextColor(Color.WHITE);title.setTextSize(17);title.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        bar.addView(title,new LinearLayout.LayoutParams(0,(int)(MainActivity.BAR_ROW_DP*d),1));
-        root.addView(bar,new LinearLayout.LayoutParams(-1,(int)((MainActivity.BAR_TOP_DP+MainActivity.BAR_ROW_DP)*d)));
+        root.setBackgroundColor(MainActivity.BG);
+        LinearLayout bar=UI.titleBar(this,"\u2190",name,new View.OnClickListener(){public void onClick(View v){finish();}},android.text.TextUtils.TruncateAt.END);
+        root.addView(bar,UI.barParams(this));
         setContentView(root);
         try {
             if(lower.endsWith(".pdf")) {
                 if(Build.VERSION.SDK_INT<21)throw new Exception("PDF viewer requires Android 5.0 or newer");
                 descriptor=ParcelFileDescriptor.open(new File(path),ParcelFileDescriptor.MODE_READ_ONLY);
                 renderer=new PdfRenderer(descriptor);
-                pageImage=new ImageView(this);pageImage.setBackgroundColor(Color.DKGRAY);pageImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                pageImage=new ImageView(this);pageImage.setBackgroundColor(MainActivity.darkMode ? Color.DKGRAY : Color.rgb(221, 224, 228));pageImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 root.addView(pageImage,new LinearLayout.LayoutParams(-1,0,1));
                 LinearLayout controls=new LinearLayout(this);controls.setGravity(android.view.Gravity.CENTER);
-                Button prev=new Button(this);prev.setText("Previous");prev.setOnClickListener(new View.OnClickListener(){public void onClick(View v){showPage(pageIndex-1);}});
-                Button next=new Button(this);next.setText("Next");next.setOnClickListener(new View.OnClickListener(){public void onClick(View v){showPage(pageIndex+1);}});
-                pageLabel=new TextView(this);pageLabel.setTextColor(Color.WHITE);pageLabel.setPadding(14,0,14,0);
+                Button prev=UI.smallButton(this,"Previous",MainActivity.BTN);prev.setOnClickListener(new View.OnClickListener(){public void onClick(View v){showPage(pageIndex-1);}});
+                Button next=UI.smallButton(this,"Next",MainActivity.BTN);next.setOnClickListener(new View.OnClickListener(){public void onClick(View v){showPage(pageIndex+1);}});
+                pageLabel=UI.text(this,"",15,MainActivity.TEXT);pageLabel.setPadding(UI.dp(this,14),0,UI.dp(this,14),0);
+                controls.setPadding(0,UI.dp(this,8),0,UI.dp(this,8));
                 controls.addView(prev);controls.addView(pageLabel);controls.addView(next);root.addView(controls);
                 showPage(0);
             } else if(lower.matches(".*\\.(mp4|mkv|webm|mov|avi|3gp)$")) {
