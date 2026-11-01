@@ -115,20 +115,8 @@ public class TeraWork {
 				return st.cancelled();
 			}
 		};
-		for (int tr = 1;; tr++) {
-			if (st.cancelled())
-				throw new IOException("Cancelled");
-			try {
-				String link = c.getDownloadLink(r.remote, r.fsId);
-				c.downloadTo(link, dest, r.size, pg);
-				return;
-			} catch (Exception e) {
-				if (tr >= 6 || !retryable(e))
-					throw e;
-				st.note("Connection problem, retrying (" + tr + "/5)...");
-				TeraClient.sleepCancellable(Math.min(30000L, 2000L * tr), pg);
-			}
-		}
+		// All downloads use the same signed-link retry, validation and atomic commit.
+		c.downloadEntry(r.remote, r.fsId, dest, r.size, pg);
 	}
 
 	static String leaf(String rel) {
