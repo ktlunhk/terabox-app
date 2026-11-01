@@ -18,6 +18,11 @@ class Icons {
 		return new Glyph(name, color);
 	}
 
+	/** Avoid compiling a regular expression for each file row. */
+	static boolean extensionIn(String ext, String choices) {
+		return ("|" + choices + "|").indexOf("|" + ext + "|") >= 0;
+	}
+
 	/** icon name for a file or folder row */
 	static String forEntry(TeraEntry e) {
 		if (e.isDir)
@@ -25,13 +30,13 @@ class Icons {
 		String n = e.name.toLowerCase(Locale.US);
 		int dot = n.lastIndexOf('.');
 		String x = dot >= 0 ? n.substring(dot + 1) : "";
-		if (x.matches("jpg|jpeg|png|gif|webp|bmp|heic|svg"))
+		if (extensionIn(x, "jpg|jpeg|png|gif|webp|bmp|heic|svg"))
 			return "image";
-		if (x.matches("mp4|mkv|avi|mov|wmv|flv|webm|3gp|m4v|ts"))
+		if (extensionIn(x, "mp4|mkv|avi|mov|wmv|flv|webm|3gp|m4v|ts"))
 			return "video";
-		if (x.matches("mp3|wav|flac|aac|m4a|ogg|opus"))
+		if (extensionIn(x, "mp3|wav|flac|aac|m4a|ogg|opus"))
 			return "audio";
-		if (x.matches("zip|rar|7z|tar|gz|tgz|bz2|xz"))
+		if (extensionIn(x, "zip|rar|7z|tar|gz|tgz|bz2|xz"))
 			return "archive";
 		return "file";
 	}
