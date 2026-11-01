@@ -152,7 +152,6 @@ public class MainActivity extends Activity {
 	TextView sortLabel, sortArrow;
 	ProgressBar loadBar;
 	int navSeq;
-	JobStatus activeFolderUpload;
 
 	// trash screen
 	String trashDir = "", trashFid = "";
@@ -202,12 +201,10 @@ public class MainActivity extends Activity {
 	protected void onResume() {
 		super.onResume();
 		TransferNotifier.appVisible = true;
-		if (activeFolderUpload != null) activeFolderUpload.showInsideApp();
 	}
 
 	protected void onPause() {
 		TransferNotifier.appVisible = false;
-		if (activeFolderUpload != null) activeFolderUpload.hideInsideApp();
 		super.onPause();
 	}
 
@@ -904,34 +901,7 @@ public class MainActivity extends Activity {
 	/** top bar: [left glyph] title [refresh] [more] */
 	LinearLayout makeTopBar(String leftGlyph, TextView[] titleOut, View.OnClickListener left, View.OnClickListener refresh,
 			View.OnClickListener more, TextView[] moreOut) {
-		LinearLayout bar = new LinearLayout(this);
-		bar.setOrientation(LinearLayout.HORIZONTAL);
-		bar.setGravity(Gravity.CENTER_VERTICAL);
-		bar.setBackgroundColor(PANEL);
-		bar.setPadding(0, dp(BAR_TOP_DP), 0, 0); // same height as the file list header (storage line + button row)
-		bar.setMinimumHeight(dp(BAR_TOP_DP + BAR_ROW_DP));
-		TextView lb = barGlyph(leftGlyph, 16, 12);
-		lb.setOnClickListener(left);
-		bar.addView(lb);
-		TextView title = mkText("", 17, TEXT);
-		title.setSingleLine(true);
-		title.setEllipsize(TextUtils.TruncateAt.START);
-		bar.addView(title, new LinearLayout.LayoutParams(0, dp(BAR_ROW_DP), 1));
-		title.setGravity(Gravity.CENTER_VERTICAL);
-		titleOut[0] = title;
-		if (refresh != null) {
-			TextView rf = barGlyph("\u21BB", 12, 12);
-			rf.setOnClickListener(refresh);
-			bar.addView(rf);
-		}
-		if (more != null) {
-			TextView mb = barGlyph("\u22EE", 12, 16);
-			mb.setOnClickListener(more);
-			bar.addView(mb);
-			if (moreOut != null)
-				moreOut[0] = mb;
-		}
-		return bar;
+		return UI.titleBar(this, leftGlyph, titleOut, left, refresh, more, moreOut, TextUtils.TruncateAt.START);
 	}
 
 	void pageTitleIcon(TextView title, String glyph) {
@@ -1022,71 +992,45 @@ public class MainActivity extends Activity {
 	};
 
 	/**
-	 * Progress of a long job. JobStatus(title) shows a modal dialog with Cancel (used while a file is opened for editing);
-	 * JobStatus(title, upload) runs in the background: an ongoing notification with a progress bar and a Cancel action.
+	 * Progress of a long job: an ongoing notification with a progress bar and a Cancel action (no dialog in the app).
+	 * Use close() when the app continues by itself afterwards; use finish() to also post a "finished" / "failed" notice.
 	 */
 	class JobStatus implements TeraWork.Status, TeraClient.Progress {
-		ProgressDialog pd; // null for background jobs
 		int jobId = -1;
 		final java.util.concurrent.atomic.AtomicBoolean cancel = new java.util.concurrent.atomic.AtomicBoolean(false);
 		String label = "";
 		String title = "";
 		boolean up;
 		long lastDone, lastTotal;
-		boolean insideApp;
 		volatile boolean finished;
+		ProgressDialog busy; // optional "processing" spinner in the app (UI thread only), next to the notification
 
-		void showInsideApp() {
-			if (!insideApp || finished || isFinishing()) return;
-			if (pd == null) {
-				pd = new ProgressDialog(MainActivity.this);
-				pd.setTitle(title);
-				pd.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
-				pd.setMax(100);
-				pd.setCancelable(false);
-				pd.setButton(DialogInterface.BUTTON_NEGATIVE, "Cancel", new DialogInterface.OnClickListener() {
-					public void onClick(DialogInterface d, int which) { cancel.set(true); }
-				});
-			}
-			if (!pd.isShowing()) {
-				pd.show();
-				DragBuilder.makeDraggable(pd);
-			}
-			pd.setMessage(label + (lastTotal > 0 ? "\n" + human(lastDone) + " / " + human(lastTotal) : ""));
-			pd.setIndeterminate(lastTotal <= 0);
-			if (lastTotal > 0) pd.setProgress((int) Math.min(100, lastDone * 100 / lastTotal));
+		/** show a spinner with the job's current step and a Cancel button, like the other operations do */
+		void showBusy() {
+			if (isFinishing() || finished) return;
+			busy = new ProgressDialog(MainActivity.this);
+			busy.setMessage(title);
+			busy.setIndeterminate(true);
+			busy.setCancelable(false);
+			busy.setButton(DialogInterface.BUTTON_NEGATIVE, "Cancel", new DialogInterface.OnClickListener() {
+				public void onClick(DialogInterface d, int which) { cancel.set(true); }
+			});
+			busy.show();
+			DragBuilder.makeDraggable(busy);
 		}
 
-		void hideInsideApp() {
-			if (insideApp && pd != null && pd.isShowing()) pd.dismiss();
-		}
-
-		void updateInsideApp() {
-			if (!insideApp) return;
+		void refreshBusy() {
+			if (busy == null) return;
 			postIfAlive(new Runnable() { public void run() {
-				if (!finished && pd != null && pd.isShowing()) {
-					pd.setMessage(label + (lastDone > 0 || lastTotal > 0 ? "\n" + human(lastDone) + (lastTotal > 0 ? " / " + human(lastTotal) : "") : ""));
-					pd.setIndeterminate(lastTotal <= 0);
-					if (lastTotal > 0) pd.setProgress((int) Math.min(100, lastDone * 100 / lastTotal));
+				if (busy != null && busy.isShowing() && !finished) {
+					String l = line(lastDone, lastTotal);
+					busy.setMessage(l.length() > 0 ? title + "\n" + l : title);
 				}
 			} });
 		}
 
 		JobStatus(String title) {
-			this.title = title;
-			pd = new ProgressDialog(MainActivity.this);
-			pd.setTitle(title);
-			pd.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
-			pd.setMax(100);
-			pd.setIndeterminate(true);
-			pd.setCancelable(false);
-			pd.setButton(DialogInterface.BUTTON_NEGATIVE, "Cancel", new DialogInterface.OnClickListener() {
-				public void onClick(DialogInterface d, int w) {
-					cancel.set(true);
-				}
-			});
-			pd.show();
-			DragBuilder.makeDraggable(pd);
+			this(title, false);
 		}
 
 		JobStatus(String title, boolean upload) {
@@ -1103,48 +1047,20 @@ public class MainActivity extends Activity {
 			label = m;
 			lastDone = 0;
 			lastTotal = 0;
-			if (jobId >= 0) {
-				TransferNotifier.update(jobId, m, 0, 0);
-				updateInsideApp();
-				return;
-			}
-			postIfAlive(new Runnable() {
-				public void run() {
-					pd.setMessage(m);
-				}
-			});
+			TransferNotifier.update(jobId, m, 0, 0);
+			refreshBusy();
 		}
 
 		public void note(final String m) {
-			if (jobId >= 0) {
-				TransferNotifier.update(jobId, label + "\n" + m, lastDone, lastTotal);
-				updateInsideApp();
-				return;
-			}
-			postIfAlive(new Runnable() {
-				public void run() {
-					pd.setMessage(label + "\n" + m);
-				}
-			});
+			TransferNotifier.update(jobId, label + "\n" + m, lastDone, lastTotal);
+			refreshBusy();
 		}
 
 		public void progress(final long done, final long total) {
 			lastDone = done;
 			lastTotal = total;
-			if (jobId >= 0) {
-				TransferNotifier.update(jobId, line(done, total), done, total);
-				updateInsideApp();
-				return;
-			}
-			postIfAlive(new Runnable() {
-				public void run() {
-					if (total > 0) {
-						pd.setIndeterminate(false);
-						pd.setProgress((int) Math.min(100, done * 100 / total));
-					}
-					pd.setMessage(label + "\n" + human(done) + (total > 0 ? " / " + human(total) : ""));
-				}
-			});
+			TransferNotifier.update(jobId, line(done, total), done, total);
+			refreshBusy();
 		}
 
 		public void onProgress(long done, long total) {
@@ -1156,20 +1072,12 @@ public class MainActivity extends Activity {
 		}
 
 		void close() {
-			if (jobId >= 0) {
-				TransferNotifier.end(jobId);
-				finished = true;
-				postIfAlive(new Runnable() { public void run() {
-					hideInsideApp();
-					if (activeFolderUpload == JobStatus.this) activeFolderUpload = null;
-				} });
-				return;
-			}
-			postIfAlive(new Runnable() {
-				public void run() {
-					pd.dismiss();
-				}
-			});
+			finished = true;
+			TransferNotifier.end(jobId);
+			postIfAlive(new Runnable() { public void run() {
+				if (busy != null && busy.isShowing()) busy.dismiss();
+				busy = null;
+			} });
 		}
 
 		/** end the job and, when the app is in the background, post a "finished" / "failed" notification */
@@ -1182,18 +1090,9 @@ public class MainActivity extends Activity {
 		}
 	}
 
-	/**
-	 * A background job (notification) that also shows its progress inside the app, like copy / move do.
-	 * Only one such window is shown at a time; further jobs run with the notification only.
-	 */
+	/** start a background job (notification only) */
 	JobStatus inAppJob(String title, boolean upload) {
-		JobStatus st = new JobStatus(title, upload);
-		if (activeFolderUpload == null || activeFolderUpload.finished) {
-			st.insideApp = true;
-			activeFolderUpload = st;
-			st.showInsideApp();
-		}
-		return st;
+		return new JobStatus(title, upload);
 	}
 
 	/** an interrupted transfer: Resume runs the same operation again, which continues from what was already transferred */
@@ -1746,11 +1645,27 @@ public class MainActivity extends Activity {
 
 	// ---- icons / text
 
-	// Used on the UI thread only; SimpleDateFormat is not thread-safe.
-	final SimpleDateFormat rowDateFormat = new SimpleDateFormat("MM/dd/yyyy h:mm a", Locale.getDefault());
+	// Device date order and 12/24-hour setting. Created on first use (needs the activity context); UI thread only.
+	java.text.DateFormat rowDateFormat, rowTimeFormat;
+	int rowFmtMode = -1;
 	String describe(TeraEntry e) {
+		int mode = prefs.getInt("dateFmt", 0); // 0 device default, 1 US, 2 UK
+		if (rowDateFormat == null || rowFmtMode != mode) {
+			rowFmtMode = mode;
+			if (mode == 1) {
+				rowDateFormat = new SimpleDateFormat("MM/dd/yyyy", Locale.US);
+				rowTimeFormat = new SimpleDateFormat("h:mm a", Locale.US);
+			} else if (mode == 2) {
+				rowDateFormat = new SimpleDateFormat("dd/MM/yyyy", Locale.UK);
+				rowTimeFormat = new SimpleDateFormat("HH:mm", Locale.UK);
+			} else {
+				rowDateFormat = android.text.format.DateFormat.getDateFormat(this);
+				rowTimeFormat = android.text.format.DateFormat.getTimeFormat(this);
+			}
+		}
+		Date d = new Date(e.mtime * 1000);
 		String when = e.mtime > 0
-				? rowDateFormat.format(new Date(e.mtime * 1000)) : "";
+				? rowDateFormat.format(d) + " " + rowTimeFormat.format(d) : "";
 		String lead = e.isDir ? "Folder" : human(e.size);
 		return lead + (when.length() > 0 ? " \u00B7 " + when : "");
 	}
@@ -2056,7 +1971,7 @@ public class MainActivity extends Activity {
 	boolean canPreview(TeraEntry e) {
         if (e.isDir || e.name == null) return false;
         String n = e.name.toLowerCase(Locale.US);
-        return n.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|mp4|mkv|webm|mov|avi|3gp|pdf)$");
+        return n.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|mp3|mp4|mkv|webm|mov|avi|3gp|pdf)$");
     }
 
     void viewEntry(final TeraEntry e) {
@@ -3262,9 +3177,6 @@ public class MainActivity extends Activity {
 		final TeraClient c = client;
 		if (c == null) return;
 		final JobStatus st = new JobStatus("Uploading folder", true);
-		st.insideApp = true;
-		activeFolderUpload = st;
-		st.showInsideApp();
 		execDl.execute(new Runnable() {
 			public void run() {
 				int uploaded = 0;
@@ -3792,6 +3704,7 @@ public class MainActivity extends Activity {
 			return;
 		final String dir = curDir;
 		final JobStatus st = inAppJob(tar ? "Creating TAR archive" : "Creating ZIP archive", true);
+		st.showBusy();
 		execDl.execute(new Runnable() {
 			public void run() {
 				String err = null;
@@ -3845,6 +3758,7 @@ public class MainActivity extends Activity {
 		if (c == null)
 			return;
 		final JobStatus st = inAppJob(TeraWork.isZipName(e.name) ? "Unzipping" : "Untarring", false);
+		st.showBusy();
 		execDl.execute(new Runnable() {
 			public void run() {
 				TeraWork.ExtractResult res = null;
@@ -4150,6 +4064,22 @@ public class MainActivity extends Activity {
 						showSettings();
 					}
 				}));
+
+		// ---- date format
+		box.addView(settingsHeader("DATE FORMAT"));
+		String[] dn = new String[] { "Device default", "US", "UK" };
+		String[] ds = new String[] { "Follows your device's region and clock setting", "MM/DD/YYYY, 12-hour clock",
+				"DD/MM/YYYY, 24-hour clock" };
+		final int dateMode = prefs.getInt("dateFmt", 0);
+		for (int i = 0; i < dn.length; i++) {
+			final int m = i;
+			box.addView(settingsRow(dn[i], ds[i], checkMark(i == dateMode), new View.OnClickListener() {
+				public void onClick(View v) {
+					prefs.edit().putInt("dateFmt", m).commit();
+					showSettings();
+				}
+			}));
+		}
 
 		// ---- general
 		box.addView(settingsHeader("GENERAL"));
