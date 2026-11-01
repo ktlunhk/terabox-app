@@ -138,14 +138,7 @@ class TextEditor {
 	}
 
 	TextView toolBtn(String label, int color) {
-		TextView b = new TextView(a);
-		b.setText(label);
-		b.setTextSize(13);
-		b.setTextColor(color);
-		b.setGravity(Gravity.CENTER);
-		b.setSingleLine(true);
-		b.setPadding(a.dp(14), 0, a.dp(14), 0);
-		return b;
+		return UI.toolButton(a, label, color);
 	}
 
 	void show() {
@@ -282,16 +275,10 @@ class TextEditor {
 		searchBar.setPadding(a.dp(10), 0, 0, 0);
 		searchBar.setVisibility(View.GONE);
 		searchBox = new EditText(a);
-		searchBox.setHint("Find in text");
-		searchBox.setTextSize(14);
-		searchBox.setTextColor(MainActivity.TEXT);
-		searchBox.setHintTextColor(MainActivity.MUTED);
-		searchBox.setSingleLine(true);
+		UI.searchEdit(searchBox, "Find in text");
 		searchBox.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
 		searchBar.addView(searchBox, new LinearLayout.LayoutParams(0, -2, 1));
-		countTv = new TextView(a);
-		countTv.setTextSize(12);
-		countTv.setTextColor(MainActivity.MUTED);
+		countTv = UI.text(a, "", 12, MainActivity.MUTED);
 		countTv.setPadding(a.dp(8), 0, a.dp(4), 0);
 		searchBar.addView(countTv, new LinearLayout.LayoutParams(-2, -2));
 		TextView prev = toolBtn("\u25B2");
