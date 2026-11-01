@@ -258,56 +258,47 @@ public class MainActivity extends Activity {
 	}
 
 	TextView mkText(String s, int sp, int color) {
-		TextView t = new TextView(this);
-		t.setText(s);
-		t.setTextSize(sp);
-		t.setTextColor(color);
-		return t;
+		return UI.text(this, s, sp, color);
 	}
 
 	Button mkBtn(String s) {
-		Button bt = new Button(this);
-		bt.setText(s);
-		bt.setAllCaps(false);
-		bt.setTextColor(Color.WHITE);
-		bt.setTextSize(16);
-		GradientDrawable g = new GradientDrawable();
-		g.setColor(ACCENT);
-		g.setCornerRadius(dp(10));
-		bt.setBackground(g);
-		return bt;
+		return UI.button(this, s);
 	}
 
 	/** compact rounded button (search page and similar) */
 	/** line icon (see Icons) on the left of a text, e.g. the outlined folder */
 	void setIcon(TextView tv, String icon, int color) {
+		setIcon(tv, icon, color, 22);
+	}
+
+	void setIcon(TextView tv, String icon, int color, int sizeDp) {
 		android.graphics.drawable.Drawable d = Icons.get(icon, color);
-		d.setBounds(0, 0, dp(22), dp(22));
+		d.setBounds(0, 0, dp(sizeDp), dp(sizeDp));
 		tv.setCompoundDrawables(d, null, null, null);
-		tv.setCompoundDrawablePadding(dp(10));
+		tv.setCompoundDrawablePadding(dp(sizeDp >= 20 ? 10 : 8));
 	}
 
 	Button mkSmallBtn(String s, int color) {
-		Button bt = mkBtn(s);
-		bt.setTextSize(14);
-		bt.setMinWidth(0);
-		bt.setMinimumWidth(0);
-		bt.setMinHeight(0);
-		bt.setMinimumHeight(0);
-		bt.setPadding(dp(18), 0, dp(18), 0);
-		GradientDrawable g = new GradientDrawable();
-		g.setColor(color);
-		g.setCornerRadius(dp(8));
-		bt.setBackground(g);
-		return bt;
+		return UI.smallButton(this, s, color);
+	}
+
+	/** Same text style for every text field inside a dialog. */
+	void dialogEdit(EditText e) {
+		UI.dialogEdit(e);
+	}
+
+	/** Dialog content with the same left / right margin for every input (Create, Rename, token, Go to line ...). */
+	LinearLayout inputBox(View... views) {
+		LinearLayout box = new LinearLayout(this);
+		box.setOrientation(LinearLayout.VERTICAL);
+		box.setPadding(dp(20), dp(8), dp(20), 0);
+		for (int i = 0; i < views.length; i++)
+			box.addView(views[i], new LinearLayout.LayoutParams(-1, -2));
+		return box;
 	}
 
 	void styleEdit(EditText e, String hint) {
-		e.setHint(hint);
-		e.setHintTextColor(MUTED);
-		e.setTextColor(TEXT);
-		e.setSingleLine(true);
-		e.setTextSize(16);
+		UI.styleEdit(e, hint);
 	}
 
 	/** Delete old disposable preview data, but retain edit drafts and active transfers. */
@@ -388,12 +379,12 @@ public class MainActivity extends Activity {
 						copyToClipboard("TeraBox cookie", cookie);
 						toast("Cookie copied");
 					}
-				}).setNeutralButton("Copy ndus", new DialogInterface.OnClickListener() {
+				}).setNegativeButton("Copy ndus", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						copyToClipboard("TeraBox ndus", ndus);
 						toast("ndus copied");
 					}
-				}).setNegativeButton("Close", null).show();
+				}).setNeutralButton("Close", null).show();
 	}
 
 	void copyToClipboard(String label, String text) {
@@ -401,7 +392,7 @@ public class MainActivity extends Activity {
 			ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
 			cm.setPrimaryClip(ClipData.newPlainText(label, text));
 		} catch (Exception e) {
-			toast("Can't copy");
+			toast("Could not copy");
 		}
 	}
 
@@ -485,9 +476,7 @@ public class MainActivity extends Activity {
 			}
 		});
 		captchaPanel.addView(captchaView, new LinearLayout.LayoutParams(-1, -2));
-		Button another = new Button(this);
-		another.setText("Load another challenge");
-		another.setAllCaps(false);
+		Button another = mkSmallBtn("Load another challenge", BTN);
 		another.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
 				loadChallenge();
@@ -734,10 +723,11 @@ public class MainActivity extends Activity {
 		e.setHint("ndus value, or the whole cookie");
 		e.setSingleLine(false);
 		e.setMinLines(2);
+		dialogEdit(e);
 		AlertDialog.Builder b = new DragBuilder(this);
 		b.setTitle("Sign in with a token");
 		b.setMessage("Paste the \"ndus\" cookie of a TeraBox session you are already signed in to in a browser.");
-		b.setView(e);
+		b.setView(inputBox(e));
 		b.setPositiveButton("Sign in", new DialogInterface.OnClickListener() {
 			public void onClick(DialogInterface d, int w) {
 				final String t = e.getText().toString().trim();
@@ -1458,11 +1448,7 @@ public class MainActivity extends Activity {
 
 	/** a text glyph button (back / refresh / more) filling the title bar row */
 	TextView barGlyph(String glyph, int padLeft, int padRight) {
-		TextView t = mkText(glyph, 22, TEXT);
-		t.setGravity(Gravity.CENTER);
-		t.setPadding(dp(padLeft), 0, dp(padRight), 0);
-		t.setLayoutParams(new LinearLayout.LayoutParams(-2, dp(BAR_ROW_DP)));
-		return t;
+		return UI.barGlyph(this, glyph, padLeft, padRight);
 	}
 	LinearLayout fileBreadcrumbs;
 
@@ -1471,7 +1457,11 @@ public class MainActivity extends Activity {
 			return;
 		boolean showCrumbs = searchTerm == null; // the path stays visible while files are selected
 		if (titleView != null) {
-			titleView.setText(searchTerm != null ? "\uD83D\uDD0D  " + searchTerm : "");
+			titleView.setText(searchTerm != null ? searchTerm : "");
+			if (searchTerm != null)
+				setIcon(titleView, "search", TEXT, 18);
+			else
+				titleView.setCompoundDrawables(null, null, null, null);
 			titleView.setVisibility(showCrumbs ? View.GONE : View.VISIBLE);
 		}
 		if (filePathScroll != null)
@@ -1755,25 +1745,6 @@ public class MainActivity extends Activity {
 	}
 
 	// ---- icons / text
-
-	static String iconFor(TeraEntry e) {
-		if (e.isDir)
-			return "\uD83D\uDCC1";
-		String n = e.name.toLowerCase(Locale.US);
-		int dot = n.lastIndexOf('.');
-		String x = dot >= 0 ? n.substring(dot + 1) : "";
-		if (x.matches("jpg|jpeg|png|gif|webp|bmp|heic"))
-			return "\uD83D\uDDBC";
-		if (x.matches("mp4|mkv|avi|mov|wmv|flv|webm|3gp|m4v|ts"))
-			return "\uD83C\uDFAC";
-		if (x.matches("mp3|wav|flac|aac|m4a|ogg|opus"))
-			return "\uD83C\uDFB5";
-		if (x.matches("zip|rar|7z|tar|gz|bz2"))
-			return "\uD83D\uDCE6";
-		if (x.equals("apk"))
-			return "\uD83E\uDD16";
-		return "\uD83D\uDCC4";
-	}
 
 	// Used on the UI thread only; SimpleDateFormat is not thread-safe.
 	final SimpleDateFormat rowDateFormat = new SimpleDateFormat("MM/dd/yyyy h:mm a", Locale.getDefault());
@@ -2205,13 +2176,13 @@ public class MainActivity extends Activity {
 				}
 			});
 		}
-		b.setNeutralButton("Copy path", new DialogInterface.OnClickListener() {
+		b.setNegativeButton("Copy path", new DialogInterface.OnClickListener() {
 			public void onClick(DialogInterface d, int w) {
 				copyText("path", e.path);
 				toast("Path copied");
 			}
 		});
-		b.setNegativeButton("Close", null);
+		b.setNeutralButton("Close", null);
 		b.show();
 	}
 
@@ -2268,13 +2239,9 @@ public class MainActivity extends Activity {
 		in.setSingleLine(true);
 		int dot = e.name.lastIndexOf('.');
 		in.setSelection(0, !e.isDir && dot > 0 ? dot : e.name.length());
-		// Match the horizontal input margins used by the Create dialog.
-		LinearLayout renameBox = new LinearLayout(this);
-		renameBox.setOrientation(LinearLayout.VERTICAL);
-		renameBox.setPadding(dp(20), dp(8), dp(20), 0);
-		renameBox.addView(in);
-		new DragBuilder(this).setTitle("Rename").setView(renameBox)
-				.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+		dialogEdit(in);
+		new DragBuilder(this).setTitle("Rename").setView(inputBox(in))
+				.setPositiveButton("Rename", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						final String nn = in.getText().toString().trim();
 						if (nn.length() == 0 || nn.indexOf('/') >= 0 || nn.equals(e.name)) {
@@ -2473,11 +2440,11 @@ public class MainActivity extends Activity {
 							public void onClick(DialogInterface d, int w) {
 								doCopyMove(todo, dest, move, "overwrite");
 							}
-						}).setNeutralButton("Keep both", new DialogInterface.OnClickListener() {
+						}).setNegativeButton("Keep both", new DialogInterface.OnClickListener() {
 							public void onClick(DialogInterface d, int w) {
 								doCopyMove(todo, dest, move, "newcopy");
 							}
-						}).setNegativeButton("Cancel", null).show();
+						}).setNeutralButton("Cancel", null).show();
 			}
 		};
 		runJob(move ? "Moving..." : "Copying...", new Job() {
@@ -2572,6 +2539,7 @@ public class MainActivity extends Activity {
 		final EditText in = new EditText(this);
 		in.setHint("Name");
 		in.setSingleLine(true);
+		dialogEdit(in);
 		box.addView(in);
 		final TextView error = new TextView(this);
 		error.setTextColor(ERR);
@@ -2723,7 +2691,8 @@ public class MainActivity extends Activity {
 		navigation.addView(pathScroll, new LinearLayout.LayoutParams(0, -2, 1));
 		header.addView(navigation);
 		root.addView(header, new LinearLayout.LayoutParams(-1, -2));
-		TextView pageHeading = mkText("⌕  Search files", 20, TEXT);
+		TextView pageHeading = mkText("Search files", 20, TEXT);
+		setIcon(pageHeading, "search", TEXT);
 		pageHeading.setPadding(dp(18), dp(10), dp(18), dp(4));
 		pageHeading.setTypeface(Typeface.DEFAULT_BOLD);
 		root.addView(pageHeading);
@@ -2764,14 +2733,16 @@ public class MainActivity extends Activity {
 		LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(-1, dp(38));
 		ap.topMargin = dp(8);
 		content.addView(actions, ap);
-		Button cancel = mkSmallBtn("✖  Cancel", BTN);
+		Button cancel = mkSmallBtn("Cancel", BTN);
+		setIcon(cancel, "close", Color.WHITE, 16);
 		LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, -1);
 		cp.rightMargin = dp(6);
 		actions.addView(cancel, cp);
 		cancel.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) { showFiles(); }
 		});
-		final Button search = mkSmallBtn("⌕  Search", ACCENT);
+		final Button search = mkSmallBtn("Search", ACCENT);
+		setIcon(search, "search", Color.WHITE, 16);
 		LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -1);
 		sp.leftMargin = dp(6);
 		actions.addView(search, sp);
@@ -2936,11 +2907,11 @@ public class MainActivity extends Activity {
 					public void onClick(DialogInterface d, int w) {
 						requestAccess();
 					}
-				}).setNeutralButton("Use system picker", new DialogInterface.OnClickListener() {
+				}).setNegativeButton("Use system picker", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						systemPicker.run();
 					}
-				}).setNegativeButton("Cancel", null).show();
+				}).setNeutralButton("Cancel", null).show();
 	}
 
 	void pickUploads() {
@@ -3665,13 +3636,13 @@ public class MainActivity extends Activity {
 										plan.active = !folder;
 										cb.go(plan);
 									}
-								}).setNeutralButton("Keep both", new DialogInterface.OnClickListener() {
+								}).setNegativeButton("Keep both", new DialogInterface.OnClickListener() {
 									public void onClick(DialogInterface d, int w) {
 										plan.mode = "newcopy";
 										plan.active = !folder;
 										cb.go(plan);
 									}
-								}).setNegativeButton("Cancel", null).show();
+								}).setNeutralButton("Cancel", null).show();
 					}
 				});
 			}
@@ -3861,8 +3832,8 @@ public class MainActivity extends Activity {
 	void confirmExtract(final TeraEntry e, final boolean toFolder) {
 		String verb = TeraWork.isZipName(e.name) ? "Unzip" : "Untar";
 		new DragBuilder(this).setTitle(verb)
-				.setMessage("Extract \"" + e.name + "\" into " + parentOf(e.path) + "?\nFiles with the same name are replaced.")
-				.setPositiveButton("Extract", new DialogInterface.OnClickListener() {
+				.setMessage(verb + " \"" + e.name + "\" into " + parentOf(e.path) + "?\nFiles with the same name are replaced.")
+				.setPositiveButton(verb, new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						runExtract(e, toFolder);
 					}
@@ -3891,7 +3862,7 @@ public class MainActivity extends Activity {
 						cache.clear();
 						afterFilesChange.run();
 						if (ferr == null) {
-							new DragBuilder(MainActivity.this).setTitle("Extracted")
+							new DragBuilder(MainActivity.this).setTitle((TeraWork.isZipName(e.name) ? "Unzip" : "Untar") + " finished")
 									.setMessage(fr.files + " file(s), " + fr.dirs + " folder(s) into\n" + fr.destDir
 											+ (fr.skipped > 0 ? "\n\n" + fr.skipped + " unsafe or unsupported entries were skipped." : ""))
 									.setPositiveButton("OK", null).show();
@@ -3968,14 +3939,14 @@ public class MainActivity extends Activity {
 						copyText("link", url);
 						toast("Link copied");
 					}
-				}).setNeutralButton("Share...", new DialogInterface.OnClickListener() {
+				}).setNegativeButton("Share...", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						Intent i = new Intent(Intent.ACTION_SEND);
 						i.setType("text/plain");
 						i.putExtra(Intent.EXTRA_TEXT, url);
 						startActivity(Intent.createChooser(i, "Share link"));
 					}
-				}).setNegativeButton("Close", null).show();
+				}).setNeutralButton("Close", null).show();
 	}
 
 	// ---- download (files and folders)
@@ -4027,7 +3998,7 @@ public class MainActivity extends Activity {
 			return;
 		final File dir = downloadDir();
 		if (dir == null) {
-			new DragBuilder(this).setTitle("Storage access needed")
+			new DragBuilder(this).setTitle("Allow access to files")
 					.setMessage("TeraFiles saves downloads to Download/TeraBox. Allow access to files first, then download again.")
 					.setPositiveButton("Allow", new DialogInterface.OnClickListener() {
 						public void onClick(DialogInterface d, int w) {
@@ -4687,13 +4658,15 @@ public class MainActivity extends Activity {
 	}
 
 	void showShareDialog(final TeraShares.Share s) {
-		new DragBuilder(this).setTitle(s.name).setMessage(s.url)
+		AlertDialog.Builder shareB = new DragBuilder(this).setTitle(s.name).setMessage(s.url)
 				.setPositiveButton("Copy link", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						copyText("link", s.url);
 						toast("Link copied");
 					}
-}).setNegativeButton(s.state.equals("cancelled") ? "Close" : "Stop sharing", new DialogInterface.OnClickListener() {
+}).setNeutralButton("Close", null);
+		if (!s.state.equals("cancelled"))
+			shareB.setNegativeButton("Stop sharing", new DialogInterface.OnClickListener() {
 					public void onClick(DialogInterface d, int w) {
 						if (s.state.equals("cancelled"))
 							return;
@@ -4714,6 +4687,7 @@ public class MainActivity extends Activity {
 							}
 						});
 					}
-				}).show();
+				});
+		shareB.show();
 	}
 }
