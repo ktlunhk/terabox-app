@@ -36,7 +36,9 @@ class Icons {
 			return "video";
 		if (extensionIn(x, "mp3|wav|flac|aac|m4a|ogg|opus"))
 			return "audio";
-		if (extensionIn(x, "zip|rar|7z|tar|gz|tgz|bz2|xz"))
+		if (extensionIn(x, "tar|tgz"))
+			return "tar";
+		if (extensionIn(x, "zip|rar|7z|gz|bz2|xz"))
 			return "archive";
 		return "file";
 	}
@@ -56,7 +58,9 @@ class Icons {
 			return "move";
 		if (s.endsWith("to folder"))
 			return "folder";
-		if (s.equals("zip") || s.equals("tar") || s.startsWith("unzip") || s.startsWith("untar"))
+		if (s.equals("tar") || s.startsWith("untar"))
+			return "tar";
+		if (s.equals("zip") || s.startsWith("unzip"))
 			return "archive";
 		if (s.startsWith("download"))
 			return "download";
@@ -169,6 +173,11 @@ class Icons {
 				line(c, 11f, 2.8f, 11f, 5f);
 				line(c, 11f, 7f, 11f, 9f);
 				c.drawRect(new RectF(9.2f, 11f, 12.8f, 15.5f), p);
+			} else if (name.equals("tar")) { // tape archive: a page with stacked bands
+				page(c);
+				line(c, 8.5f, 11f, 16f, 11f);
+				line(c, 8.5f, 14f, 16f, 14f);
+				line(c, 8.5f, 17f, 16f, 17f);
 			} else if (name.equals("trash")) {
 				line(c, 4f, 6.5f, 20f, 6.5f);
 				line(c, 9f, 6.5f, 9f, 3.8f, 15f, 3.8f, 15f, 6.5f);
