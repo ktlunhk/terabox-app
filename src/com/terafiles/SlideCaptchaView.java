@@ -77,7 +77,8 @@ public class SlideCaptchaView extends View {
 
 	protected void onDraw(Canvas c) {
 		if (master == null || mw <= 0) {
-			c.drawColor(0xFF2A2F38);
+			c.drawColor(MainActivity.PANEL);
+			text.setColor(MainActivity.MUTED);
 			c.drawText("Loading challenge...", getWidth() / 2f, getHeight() / 2f, text);
 			return;
 		}
