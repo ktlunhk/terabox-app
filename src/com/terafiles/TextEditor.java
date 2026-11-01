@@ -57,6 +57,7 @@ class TextEditor {
 	String content;
 	boolean dirty, loading, saved, wrap;
 	static final int MAX_HISTORY = 10000;
+	static final long MAX_HISTORY_CHARS = 8L * 1024L * 1024L;
 	static class Change {
 		int start;
 		String before, after;
@@ -65,6 +66,7 @@ class TextEditor {
 		}
 	}
 	final ArrayList<Change> undoHistory = new ArrayList<Change>();
+	long undoHistoryChars = 0;
 	final ArrayList<Change> redoHistory = new ArrayList<Change>();
 	boolean applyingHistory;
 	int changeStart;
@@ -86,12 +88,14 @@ class TextEditor {
 		ArrayList<Change> source = undo ? undoHistory : redoHistory;
 		if (source.isEmpty() || tv == null) return;
 		Change c = source.remove(source.size() - 1);
+		if (undo) undoHistoryChars -= c.before.length() + c.after.length();
 		Editable e = tv.getText();
 		String expected = undo ? c.after : c.before;
 		String replacement = undo ? c.before : c.after;
 		if (c.start < 0 || c.start + expected.length() > e.length()
 				|| !e.subSequence(c.start, c.start + expected.length()).toString().equals(expected)) {
 			source.add(c);
+			if (undo) undoHistoryChars += c.before.length() + c.after.length();
 			refreshHistoryButtons();
 			return;
 		}
@@ -100,6 +104,7 @@ class TextEditor {
 			e.replace(c.start, c.start + expected.length(), replacement);
 			tv.setSelection(Math.min(e.length(), c.start + replacement.length()));
 			(undo ? redoHistory : undoHistory).add(c);
+			if (!undo) undoHistoryChars += c.before.length() + c.after.length();
 		} finally {
 			applyingHistory = false;
 			refreshHistoryButtons();
@@ -366,9 +371,14 @@ class TextEditor {
 
 			public void onTextChanged(CharSequence s, int x, int y, int z) {
 				if (!loading && !applyingHistory && (y != 0 || z != 0)) {
-					undoHistory.add(new Change(changeStart, changeBefore,
-							s.subSequence(x, x + z).toString()));
-					if (undoHistory.size() > MAX_HISTORY) undoHistory.remove(0);
+					Change added = new Change(changeStart, changeBefore,
+							s.subSequence(x, x + z).toString());
+					undoHistory.add(added);
+					undoHistoryChars += added.before.length() + added.after.length();
+					while (!undoHistory.isEmpty() && (undoHistory.size() > MAX_HISTORY || undoHistoryChars > MAX_HISTORY_CHARS)) {
+						Change removed = undoHistory.remove(0);
+						undoHistoryChars -= removed.before.length() + removed.after.length();
+					}
 					redoHistory.clear();
 					refreshHistoryButtons();
 				}
