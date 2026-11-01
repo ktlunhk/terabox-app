@@ -19,6 +19,7 @@ public class PreviewProvider extends ContentProvider {
         if (n.endsWith(".webp")) return "image/webp";
         if (n.endsWith(".bmp")) return "image/bmp";
         if (n.endsWith(".heic")) return "image/heic";
+        if (n.endsWith(".mp3")) return "audio/mpeg";
         if (n.endsWith(".mp4")) return "video/mp4";
         if (n.endsWith(".mkv")) return "video/x-matroska";
         if (n.endsWith(".webm")) return "video/webm";
