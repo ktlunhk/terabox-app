@@ -753,8 +753,8 @@ public class TeraClient {
 		IOException last = null;
 		for (int attempt = 0; attempt < 3; attempt++) {
 			if (pg != null && pg.cancelled()) throw new IOException("Cancelled");
-			// A fresh signed URL can point to different content; restart safely.
-			if (part.exists() && !part.delete()) throw new IOException("Cannot reset temporary download");
+			// Keep verified partial bytes for HTTP Range resume. downloadTo validates
+			// Content-Range and restarts when the server does not support resuming.
 			try {
 				String link = getDownloadLink(path, fsId);
 				downloadTo(link, part, expectedSize, pg);
@@ -762,8 +762,12 @@ public class TeraClient {
 					throw new IOException("Incomplete file: " + part.length() + " of " + expectedSize);
 				// Do not destroy an existing good destination if rename fails.
 				// Retain any existing backup until a replacement has been safely committed.
-				if (old.exists() && dest.exists() && !old.delete()) throw new IOException("Cannot rotate old backup");
-				if (old.exists() && !dest.exists()) throw new IOException("Unrecovered backup exists");
+				if (old.exists() && !dest.exists() && !old.renameTo(dest))
+					throw new IOException("Cannot restore prior download");
+				// Never destroy an earlier recovery backup to make room for a new one.
+				// Require explicit recovery before replacing the destination again.
+				if (old.exists() && dest.exists())
+					old.delete(); // dest is the good copy (the backup was only needed for an interrupted commit)
 				if (dest.exists() && !dest.renameTo(old)) throw new IOException("Cannot back up destination");
 				if (!part.renameTo(dest)) {
 					if (old.exists()) old.renameTo(dest);
@@ -774,8 +778,8 @@ public class TeraClient {
 			} catch (IOException ex) {
 				last = ex;
 				String msg = ex.getMessage() == null ? "" : ex.getMessage();
-				if ("Cancelled".equals(msg) || msg.startsWith("Refusing a non-HTTPS")) throw ex;
-			} finally { if (part.exists()) part.delete(); }
+				if ("Cancelled".equals(msg) || msg.startsWith("Refusing a non-HTTPS") || msg.startsWith("Cannot ")) throw ex;
+			} finally { /* Preserve partial bytes across transient failures. */ }
 		}
 		throw new IOException("Unable to download the complete file after 3 attempts. " +
 			(last == null ? "" : last.getMessage()));
