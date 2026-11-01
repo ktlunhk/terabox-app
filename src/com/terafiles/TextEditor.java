@@ -263,7 +263,7 @@ class TextEditor {
 			cells[i].setPadding(a.dp(2), 0, a.dp(2), 0);
 		}
 		LinearLayout toolsScroll = tools;
-		toolsScroll.setBackgroundColor(Color.rgb(45, 105, 160));
+		toolsScroll.setBackgroundColor(MainActivity.BRAND_BLUE);
 
 		wrapBtn.setOnClickListener(new View.OnClickListener() {
 			public void onClick(View v) {
@@ -461,6 +461,22 @@ class TextEditor {
 			public void run() {
 				String err = null;
 				try {
+					// Do not silently overwrite a newer remote revision.
+					org.json.JSONObject listing = c.listAll(remoteDir);
+					if (listing.optInt("errno", -1) != 0 || listing.optJSONArray("list") == null)
+						throw new java.io.IOException("Cannot verify remote version. Save cancelled.");
+					boolean found = false;
+					org.json.JSONArray items = listing.getJSONArray("list");
+					for (int i = 0; i < items.length(); i++) {
+						TeraEntry current = TeraEntry.from(items.getJSONObject(i));
+						if (entry.path.equals(current.path)) {
+							found = true;
+							if (current.size != entry.size || current.mtime != entry.mtime)
+								throw new java.io.IOException("Remote file changed since opening. Reopen it before saving.");
+							break;
+						}
+					}
+					if (!found) throw new java.io.IOException("Remote file no longer exists. Save cancelled.");
 					OutputStreamWriter out = new OutputStreamWriter(new FileOutputStream(local), "UTF-8");
 					try {
 						out.write(text);
@@ -473,6 +489,21 @@ class TextEditor {
 					}
 					st.message("Uploading " + entry.name);
 					c.uploadFile(local, remoteDir, entry.name, st);
+					// Refresh the revision baseline so a second save does not falsely
+					// conflict with this editor's own previous upload.
+					try {
+						org.json.JSONObject updated = c.listAll(remoteDir);
+						org.json.JSONArray list = updated.optJSONArray("list");
+						if (list != null) for (int i = 0; i < list.length(); i++) {
+							TeraEntry now = TeraEntry.from(list.getJSONObject(i));
+							if (entry.path.equals(now.path)) {
+								entry.size = now.size;
+								entry.mtime = now.mtime;
+								entry.fsId = now.fsId;
+								break;
+							}
+						}
+					} catch (Exception ignored) { /* Save succeeded; next save will recheck. */ }
 				} catch (Exception e) {
 					err = e.getMessage() == null ? e.toString() : e.getMessage();
 				}
