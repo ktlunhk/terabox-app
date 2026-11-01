@@ -243,6 +243,9 @@ class Icons {
 				q.quadTo(12f, 21f, 2f, 12f);
 				c.drawPath(q, p);
 				c.drawCircle(12f, 12f, 3f, p);
+			} else if (name.equals("close")) {
+				line(c, 6f, 6f, 18f, 18f);
+				line(c, 18f, 6f, 6f, 18f);
 			} else if (name.equals("check")) {
 				line(c, 4.5f, 12.5f, 10f, 18f, 20f, 6.5f);
 			}
