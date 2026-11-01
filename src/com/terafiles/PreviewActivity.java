@@ -17,7 +17,7 @@ import android.media.MediaPlayer;
 import java.io.File;
 import java.util.Locale;
 
-/** Offline in-app image, video and PDF viewer; no AndroidX dependencies. */
+/** Offline in-app image, video, MP3 and PDF viewer; no AndroidX dependencies. */
 public class PreviewActivity extends Activity {
     private PdfRenderer renderer;
     private ParcelFileDescriptor descriptor;
@@ -27,6 +27,13 @@ public class PreviewActivity extends Activity {
     private int pageIndex;
     private VideoView video;
     private String path;
+    private MediaPlayer audio;
+    private SeekBar seek;
+    private TextView timeLabel;
+    private Button playBtn;
+    private boolean dragging;
+    private final android.os.Handler ticker = new android.os.Handler();
+    private final Runnable tick = new Runnable() { public void run() { updateAudio(); if (audio != null) ticker.postDelayed(this, 500); } };
     @Override public void onCreate(Bundle b) {
         if (!MainActivity.darkMode) { // follow the app's Light / Dark theme setting
             int theme = getResources().getIdentifier("AppThemeLight", "style", getPackageName());
@@ -58,6 +65,8 @@ public class PreviewActivity extends Activity {
                 controls.setPadding(0,UI.dp(this,8),0,UI.dp(this,8));
                 controls.addView(prev);controls.addView(pageLabel);controls.addView(next);root.addView(controls);
                 showPage(0);
+            } else if(lower.endsWith(".mp3")) {
+                showAudio(root,name);
             } else if(lower.matches(".*\\.(mp4|mkv|webm|mov|avi|3gp)$")) {
                 video=new VideoView(this);root.addView(video,new LinearLayout.LayoutParams(-1,0,1));
                 MediaController controller=new MediaController(this);controller.setAnchorView(video);
@@ -98,6 +107,51 @@ public class PreviewActivity extends Activity {
             pageIndex=index;pageLabel.setText((index+1)+" / "+renderer.getPageCount());
         }catch(Exception ex){message(ex.getMessage());}
     }
+    private void showAudio(LinearLayout root,String name) throws Exception {
+        audio=new MediaPlayer();
+        audio.setDataSource(path);
+        audio.prepare();
+        LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setGravity(android.view.Gravity.CENTER);
+        box.setPadding(UI.dp(this,24),UI.dp(this,24),UI.dp(this,24),UI.dp(this,24));
+        TextView note=UI.text(this,"\u266A",72,MainActivity.ACCENT);note.setGravity(android.view.Gravity.CENTER);
+        TextView title=UI.text(this,name,17,MainActivity.TEXT);title.setGravity(android.view.Gravity.CENTER);title.setPadding(0,UI.dp(this,8),0,UI.dp(this,24));
+        seek=new SeekBar(this);seek.setMax(Math.max(1,audio.getDuration()));
+        timeLabel=UI.text(this,"",14,MainActivity.MUTED);timeLabel.setGravity(android.view.Gravity.CENTER);timeLabel.setPadding(0,UI.dp(this,4),0,UI.dp(this,16));
+        playBtn=UI.button(this,"Pause");
+        playBtn.setOnClickListener(new View.OnClickListener(){public void onClick(View v){
+            if(audio==null)return;
+            if(audio.isPlaying()){audio.pause();playBtn.setText("Play");}
+            else{audio.start();playBtn.setText("Pause");}
+        }});
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            public void onProgressChanged(SeekBar bar,int progress,boolean fromUser){if(fromUser)timeLabel.setText(clock(progress)+" / "+clock(audio.getDuration()));}
+            public void onStartTrackingTouch(SeekBar bar){dragging=true;}
+            public void onStopTrackingTouch(SeekBar bar){dragging=false;if(audio!=null)audio.seekTo(bar.getProgress());}
+        });
+        audio.setOnCompletionListener(new MediaPlayer.OnCompletionListener(){public void onCompletion(MediaPlayer mp){playBtn.setText("Play");mp.seekTo(0);seek.setProgress(0);timeLabel.setText(clock(0)+" / "+clock(mp.getDuration()));}});
+        audio.setOnErrorListener(new MediaPlayer.OnErrorListener(){public boolean onError(MediaPlayer mp,int what,int extra){message("Audio format not supported on this device");return true;}});
+        box.addView(note,new LinearLayout.LayoutParams(-1,-2));
+        box.addView(title,new LinearLayout.LayoutParams(-1,-2));
+        box.addView(seek,new LinearLayout.LayoutParams(-1,-2));
+        box.addView(timeLabel,new LinearLayout.LayoutParams(-1,-2));
+        box.addView(playBtn,new LinearLayout.LayoutParams(-2,-2));
+        root.addView(box,new LinearLayout.LayoutParams(-1,0,1));
+        updateAudio();
+        audio.start();
+        ticker.postDelayed(tick,500);
+    }
+    private void updateAudio(){
+        if(audio==null||seek==null)return;
+        try {
+            int pos=audio.getCurrentPosition();
+            if(!dragging){seek.setProgress(pos);timeLabel.setText(clock(pos)+" / "+clock(audio.getDuration()));}
+        }catch(Exception ignored){}
+    }
+    private static String clock(int ms){int s=ms/1000;return (s/60)+":"+(s%60<10?"0":"")+(s%60);}
+    @Override protected void onPause(){
+        if(audio!=null&&audio.isPlaying()){audio.pause();if(playBtn!=null)playBtn.setText("Play");}
+        super.onPause();
+    }
     private void message(String s){Toast.makeText(this,s==null?"Unable to open file":s,Toast.LENGTH_LONG).show();}
-    @Override protected void onDestroy(){if(video!=null)video.stopPlayback();if(pageImage!=null)pageImage.setImageDrawable(null);if(pageBitmap!=null)pageBitmap.recycle();if(renderer!=null)renderer.close();if(descriptor!=null)try{descriptor.close();}catch(Exception ignored){}super.onDestroy();}
+    @Override protected void onDestroy(){ticker.removeCallbacks(tick);if(audio!=null){audio.release();audio=null;}if(video!=null)video.stopPlayback();if(pageImage!=null)pageImage.setImageDrawable(null);if(pageBitmap!=null)pageBitmap.recycle();if(renderer!=null)renderer.close();if(descriptor!=null)try{descriptor.close();}catch(Exception ignored){}super.onDestroy();}
 }
