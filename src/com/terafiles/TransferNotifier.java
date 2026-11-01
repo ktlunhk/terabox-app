@@ -71,7 +71,7 @@ public class TransferNotifier {
 		Notification.Builder b = builder();
 		b.setSmallIcon(j.up ? android.R.drawable.stat_sys_upload : android.R.drawable.stat_sys_download);
 		b.setContentTitle(j.title);
-		b.setContentText(j.text);
+		b.setContentText(firstLine(j.text));
 		b.setStyle(new Notification.BigTextStyle().bigText(j.text));
 		b.setOngoing(true);
 		b.setOnlyAlertOnce(true);
@@ -84,6 +84,11 @@ public class TransferNotifier {
 		b.setContentIntent(openApp());
 		b.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelIntent(j.id));
 		return b.build();
+	}
+
+	static String firstLine(String t) {
+		int i = t.indexOf('\n');
+		return i < 0 ? t : t.substring(0, i);
 	}
 
 	/** start tracking a job; returns its id */
@@ -107,9 +112,11 @@ public class TransferNotifier {
 				else
 					app.startService(si);
 			} catch (Exception e) {
-				jobs.remove(j.id);
-				throw new IllegalStateException("Cannot start protected background transfer", e);
+				// The system refused the service (e.g. started from the background): the job still runs while the
+				// app is alive, only the keep-alive and the notification are missing.
 			}
+		} else {
+			refresh();
 		}
 		return j.id;
 	}
@@ -126,7 +133,17 @@ public class TransferNotifier {
 		if (now - j.lastNotify < 700 && !(total > 0 && done >= total))
 			return;
 		j.lastNotify = now;
-		// No per-file progress notification.
+		refresh();
+	}
+
+	/** re-post the foreground notification with the current progress */
+	static synchronized void refresh() {
+		if (app == null || jobs.isEmpty())
+			return;
+		try {
+			nm().notify(STUB_ID, foreground());
+		} catch (Exception e) {
+		}
 	}
 
 	/** the job is over; its ongoing notification goes away */
@@ -141,29 +158,54 @@ public class TransferNotifier {
 				app.stopService(new Intent(app, TransferService.class));
 		}
 		nm().cancel(id);
+		if (jobs.isEmpty())
+			nm().cancel(STUB_ID);
+		else
+			refresh();
 	}
 
 	/** Cancel pressed on the notification */
 	static synchronized void cancel(int id) {
-		Entry j = jobs.get(id);
-		if (j == null)
-			return;
-		j.cancel.set(true);
-		j.text = "Cancelling...";
-		// No per-file progress notification.
+		for (Entry j : jobs.values()) {
+			if (id < 0 || j.id == id) { // id -1 = "Cancel all"
+				j.cancel.set(true);
+				j.text = "Cancelling...";
+			}
+		}
+		refresh();
 	}
 
-	/** Minimal mandatory Android foreground-service notification. */
+	/** The foreground-service notification: the running job with its progress bar and a Cancel button
+	 * (several jobs: a summary with "Cancel all"). */
 	static synchronized Notification foreground() {
+		fgId = STUB_ID;
+		int n = jobs.size();
+		if (n == 1)
+			return build(jobs.values().iterator().next());
 		Notification.Builder b = builder();
 		b.setSmallIcon(android.R.drawable.stat_sys_upload);
 		b.setContentTitle("TeraFiles");
-		b.setContentText("File transfer running");
+		b.setContentText(n == 0 ? "File transfer running" : n + " transfers running");
 		b.setOngoing(true);
 		b.setOnlyAlertOnce(true);
 		b.setContentIntent(openApp());
-		if (Build.VERSION.SDK_INT < 26) b.setPriority(Notification.PRIORITY_MIN);
-		fgId = STUB_ID;
+		if (Build.VERSION.SDK_INT < 26)
+			b.setPriority(Notification.PRIORITY_LOW);
+		if (n > 0) {
+			long sum = 0;
+			int known = 0;
+			for (Entry j : jobs.values()) {
+				if (j.total > 0) {
+					sum += Math.min(100, j.done * 100 / j.total);
+					known++;
+				}
+			}
+			if (known > 0)
+				b.setProgress(100, (int) (sum / known), false);
+			else
+				b.setProgress(0, 0, true);
+			b.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel all", cancelIntent(-1));
+		}
 		return b.build();
 	}
 
