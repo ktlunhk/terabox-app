@@ -72,22 +72,63 @@ final class UI {
 		return new LinearLayout.LayoutParams(-1, dp(c, MainActivity.BAR_TOP_DP + MainActivity.BAR_ROW_DP));
 	}
 
-	/** title bar for the editor and the preview: [back glyph] title */
-	static LinearLayout titleBar(Context c, String glyph, String title, View.OnClickListener back, TextUtils.TruncateAt ellipsize) {
+	/** the one title bar every screen uses: [left glyph] title [refresh] [more]; refresh / more are optional */
+	static LinearLayout titleBar(Context c, String glyph, TextView[] titleOut, View.OnClickListener left,
+			View.OnClickListener refresh, View.OnClickListener more, TextView[] moreOut, TextUtils.TruncateAt ellipsize) {
 		LinearLayout bar = new LinearLayout(c);
 		bar.setOrientation(LinearLayout.HORIZONTAL);
 		bar.setGravity(Gravity.CENTER_VERTICAL);
 		bar.setBackgroundColor(MainActivity.PANEL);
 		bar.setPadding(0, dp(c, MainActivity.BAR_TOP_DP), 0, 0);
+		bar.setMinimumHeight(dp(c, MainActivity.BAR_TOP_DP + MainActivity.BAR_ROW_DP));
 		TextView g = barGlyph(c, glyph, 16, 12);
-		g.setOnClickListener(back);
+		g.setOnClickListener(left);
 		bar.addView(g);
-		TextView t = text(c, title, 17, MainActivity.TEXT);
+		TextView t = text(c, "", 17, MainActivity.TEXT);
 		t.setSingleLine(true);
 		t.setEllipsize(ellipsize);
 		t.setGravity(Gravity.CENTER_VERTICAL);
 		bar.addView(t, new LinearLayout.LayoutParams(0, dp(c, MainActivity.BAR_ROW_DP), 1));
+		titleOut[0] = t;
+		if (refresh != null) {
+			TextView rf = barGlyph(c, "\u21BB", 12, 12);
+			rf.setOnClickListener(refresh);
+			bar.addView(rf);
+		}
+		if (more != null) {
+			TextView mb = barGlyph(c, "\u22EE", 12, 16);
+			mb.setOnClickListener(more);
+			bar.addView(mb);
+			if (moreOut != null)
+				moreOut[0] = mb;
+		}
 		return bar;
+	}
+
+	/** title bar with just a back glyph and a fixed title (editor, preview) */
+	static LinearLayout titleBar(Context c, String glyph, String title, View.OnClickListener back, TextUtils.TruncateAt ellipsize) {
+		TextView[] t = new TextView[1];
+		LinearLayout bar = titleBar(c, glyph, t, back, null, null, null, ellipsize);
+		t[0].setText(title);
+		return bar;
+	}
+
+	/** a flat text button in a tool row (editor: Undo, Redo, Save ...) */
+	static TextView toolButton(Context c, String label, int color) {
+		TextView b = text(c, label, 13, color);
+		b.setGravity(Gravity.CENTER);
+		b.setSingleLine(true);
+		b.setPadding(dp(c, 14), 0, dp(c, 14), 0);
+		return b;
+	}
+
+	/** compact single-line field for a search bar */
+	static void searchEdit(EditText e, String hint) {
+		e.setHint(hint);
+		e.setTextSize(14);
+		e.setTextColor(MainActivity.TEXT);
+		e.setHintTextColor(MainActivity.MUTED);
+		e.setSingleLine(true);
 	}
 
 	/** same text style for every text field inside a dialog */
