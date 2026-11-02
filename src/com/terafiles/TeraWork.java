@@ -1,5 +1,6 @@
 package com.terafiles;
 
+import android.util.Log;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -420,6 +421,7 @@ public class TeraWork {
 				try {
 					c.mkdir(path); // "already exists" answers are harmless
 				} catch (Exception e) {
+					Log.w("TeraFiles", "TeraWork.ensureDirs failed", e);
 				}
 			}
 		}
