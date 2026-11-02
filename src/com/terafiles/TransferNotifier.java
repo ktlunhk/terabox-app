@@ -152,10 +152,11 @@ public class TransferNotifier {
 			return;
 		if (jobs.isEmpty()) {
 			TransferService s = TransferService.inst;
+			// If the service is not running yet (a job that ends instantly, e.g. opening an empty file), do NOT call
+			// stopService: that races with startForegroundService and kills the app with "did not then call
+			// startForeground()". The service stops itself in onStartCommand when it finds no jobs.
 			if (s != null)
 				s.shutDown();
-			else
-				app.stopService(new Intent(app, TransferService.class));
 		}
 		nm().cancel(id);
 		if (jobs.isEmpty())
