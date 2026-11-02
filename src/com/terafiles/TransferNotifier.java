@@ -7,7 +7,10 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.util.Log;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Background progress notifications for uploads / downloads. Each running job has an ongoing notification with a
@@ -33,6 +36,24 @@ public class TransferNotifier {
 	/** set by MainActivity: true while the app is on screen (then no "finished" notification is posted) */
 	static volatile boolean appVisible = true;
 	static final LinkedHashMap<Integer, Entry> jobs = new LinkedHashMap<Integer, Entry>();
+	/** pools of destroyed activities that still had transfers running; shut down when the last job ends */
+	static final ArrayList<ExecutorService> deferredPools = new ArrayList<ExecutorService>();
+
+	/** shut the pools down now if no transfer is running, otherwise as soon as the last one ends */
+	static synchronized void shutdownWhenIdle(ExecutorService... pools) {
+		for (ExecutorService p : pools) {
+			if (jobs.isEmpty())
+				p.shutdown();
+			else
+				deferredPools.add(p);
+		}
+	}
+
+	static void shutdownDeferred() {
+		for (ExecutorService p : deferredPools)
+			p.shutdown();
+		deferredPools.clear();
+	}
 
 	static NotificationManager nm() {
 		return (NotificationManager) app.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -114,6 +135,7 @@ public class TransferNotifier {
 			} catch (Exception e) {
 				// The system refused the service (e.g. started from the background): the job still runs while the
 				// app is alive, only the keep-alive and the notification are missing.
+				Log.w("TeraFiles", "TransferNotifier.begin failed", e);
 			}
 		} else {
 			refresh();
@@ -140,9 +162,13 @@ public class TransferNotifier {
 	static synchronized void refresh() {
 		if (app == null || jobs.isEmpty())
 			return;
+		TransferService svc = TransferService.inst;
+		if (svc != null)
+			svc.renewWakeLock();
 		try {
 			nm().notify(STUB_ID, foreground());
 		} catch (Exception e) {
+			Log.w("TeraFiles", "TransferNotifier.refresh failed", e);
 		}
 	}
 
@@ -159,9 +185,10 @@ public class TransferNotifier {
 				s.shutDown();
 		}
 		nm().cancel(id);
-		if (jobs.isEmpty())
+		if (jobs.isEmpty()) {
 			nm().cancel(STUB_ID);
-		else
+			shutdownDeferred();
+		} else
 			refresh();
 	}
 
