@@ -151,6 +151,8 @@ public class MainActivity extends Activity {
 	CheckBox selAll;
 	TextView sortLabel, sortArrow;
 	ProgressBar loadBar;
+	ProgressBar jobBar; // thin bar for background work (upload, duplicate check); UI thread only
+	int jobBars;
 	int navSeq;
 
 	// trash screen
@@ -1003,6 +1005,7 @@ public class MainActivity extends Activity {
 		boolean up;
 		long lastDone, lastTotal;
 		volatile boolean finished;
+		boolean barOn;
 		ProgressDialog busy; // optional "processing" spinner in the app (UI thread only), next to the notification
 
 		/** show a spinner with the job's current step and a Cancel button, like the other operations do */
@@ -1017,6 +1020,13 @@ public class MainActivity extends Activity {
 			});
 			busy.show();
 			DragBuilder.makeDraggable(busy);
+		}
+
+		/** non-blocking: show the in-app bar until close()/finish() (UI thread only) */
+		void showBar() {
+			if (isFinishing() || finished || barOn) return;
+			barOn = true;
+			jobBarAdd(1);
 		}
 
 		void refreshBusy() {
@@ -1077,6 +1087,7 @@ public class MainActivity extends Activity {
 			postIfAlive(new Runnable() { public void run() {
 				if (busy != null && busy.isShowing()) busy.dismiss();
 				busy = null;
+				if (barOn) { barOn = false; jobBarAdd(-1); }
 			} });
 		}
 
@@ -1088,6 +1099,12 @@ public class MainActivity extends Activity {
 			else if (!"Cancelled".equals(err))
 				TransferNotifier.result(MainActivity.this, title + " interrupted", err + "\nOpen TeraFiles to resume.", false);
 		}
+	}
+
+	/** show/hide the in-app bar while background work runs (counted, so overlapping jobs work); UI thread only */
+	void jobBarAdd(int d) {
+		jobBars = Math.max(0, jobBars + d);
+		if (jobBar != null) jobBar.setVisibility(jobBars > 0 ? View.VISIBLE : View.GONE);
 	}
 
 	/** start a background job (notification only) */
@@ -1178,6 +1195,10 @@ public class MainActivity extends Activity {
 		loadBar.setIndeterminate(true);
 		loadBar.setVisibility(View.INVISIBLE);
 		root.addView(loadBar, new LinearLayout.LayoutParams(-1, dp(3)));
+		jobBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+		jobBar.setIndeterminate(true);
+		jobBar.setVisibility(jobBars > 0 ? View.VISIBLE : View.GONE);
+		root.addView(jobBar, new LinearLayout.LayoutParams(-1, dp(3)));
 
 		infoView = mkText("", 12, MUTED);
 		infoView.setPadding(dp(16), dp(6), dp(16), dp(2));
@@ -1981,6 +2002,7 @@ public class MainActivity extends Activity {
         dir.mkdirs();
         final File local = new File(dir, System.nanoTime() + "_" + TeraWork.safeSegment(e.name));
         final JobStatus st = new JobStatus("Opening " + e.name);
+        st.showBusy();
         execDl.execute(new Runnable() {
             public void run() {
                 String error = null;
@@ -2021,6 +2043,7 @@ public class MainActivity extends Activity {
 		dir.mkdirs();
 		final File local = new File(dir, TeraWork.safeSegment(e.name));
 		final JobStatus st = new JobStatus("Opening " + e.name);
+		st.showBusy();
 		execDl.execute(new Runnable() {
 			public void run() {
 				String err = null;
@@ -3177,6 +3200,7 @@ public class MainActivity extends Activity {
 		final TeraClient c = client;
 		if (c == null) return;
 		final JobStatus st = new JobStatus("Uploading folder", true);
+		st.showBusy(); // spinner with step, bytes and Cancel (the notification stays too)
 		execDl.execute(new Runnable() {
 			public void run() {
 				int uploaded = 0;
@@ -3246,6 +3270,7 @@ public class MainActivity extends Activity {
 		if (c == null || files.isEmpty())
 			return;
 		final JobStatus st = inAppJob("Uploading", true);
+		st.showBusy(); // spinner with step, bytes and Cancel (the notification stays too)
 		execDl.execute(new Runnable() {
 			public void run() {
 				int ok = 0;
@@ -3323,6 +3348,7 @@ public class MainActivity extends Activity {
 		if (c == null)
 			return;
 		final JobStatus st = inAppJob("Uploading folder", true);
+		st.showBusy(); // spinner with step, bytes and Cancel (the notification stays too)
 		execDl.execute(new Runnable() {
 			public void run() {
 				int uploaded = 0;
@@ -3521,6 +3547,16 @@ public class MainActivity extends Activity {
 		if (c == null)
 			return;
 		final DupPlan plan = new DupPlan();
+		final android.app.ProgressDialog chk = new android.app.ProgressDialog(this);
+		chk.setMessage("Checking " + dir + " ...");
+		chk.setIndeterminate(true);
+		chk.setCancelable(false);
+		final boolean[] chkCancel = new boolean[1];
+		chk.setButton(DialogInterface.BUTTON_NEGATIVE, "Cancel", new DialogInterface.OnClickListener() {
+			public void onClick(DialogInterface d, int w) { chkCancel[0] = true; }
+		});
+		chk.show();
+		DragBuilder.makeDraggable(chk);
 		execDl.execute(new Runnable() {
 			public void run() {
 				java.util.HashMap<String, TeraEntry> have = remoteNames(c, plan, dir);
@@ -3530,6 +3566,8 @@ public class MainActivity extends Activity {
 						clash.add(names.get(i));
 				postIfAlive(new Runnable() {
 					public void run() {
+						try { if (chk.isShowing()) chk.dismiss(); } catch (Exception ignored) { }
+						if (chkCancel[0]) return;
 						if (clash.isEmpty()) {
 							cb.go(plan);
 							return;
@@ -3634,6 +3672,7 @@ public class MainActivity extends Activity {
 		if (c == null)
 			return;
 		final JobStatus st = inAppJob("Uploading", true);
+		st.showBusy(); // spinner with step, bytes and Cancel (the notification stays too)
 		execDl.execute(new Runnable() {
 			public void run() {
 				int ok = 0;
@@ -3923,6 +3962,7 @@ public class MainActivity extends Activity {
 		}
 		final TeraClient c = client;
 		final JobStatus st = inAppJob("Downloading", false);
+		st.showBusy();
 		execDl.execute(new Runnable() {
 			public void run() {
 				int files = 0;
