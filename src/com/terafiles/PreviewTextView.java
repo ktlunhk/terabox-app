@@ -77,13 +77,13 @@ public class PreviewTextView extends EditText {
 		setKeyListener(editable ? editKeyListener : null);
 		setTextIsSelectable(true);
 		setCursorVisible(editable);
-        // Read-only preview still needs focus to maintain a selection/caret
-        // position for the active block and line guides. No KeyListener means
-        // the soft keyboard cannot edit the document in View mode.
-        setFocusable(true);
-        setFocusableInTouchMode(true);
-        if (editable) requestFocus();
-        invalidate();
+		// Read-only preview still needs focus to maintain a selection/caret
+		// position for the active block and line guides. No KeyListener means
+		// the soft keyboard cannot edit the document in View mode.
+		setFocusable(true);
+		setFocusableInTouchMode(true);
+		if (editable) requestFocus();
+		invalidate();
 	}
 
 	public boolean isEditable() { return getKeyListener() != null; }
@@ -491,24 +491,24 @@ public class PreviewTextView extends EditText {
 			}
 			if (wasSwallow) return true;
 		}
-        boolean handled = super.onTouchEvent(ev);
-        // In View mode Android's selectable TextView does not consistently
-        // move its selection on a simple tap. Update the read-only caret so
-        // IndentGuides can draw the same active block as in Edit mode.
-        if (action == MotionEvent.ACTION_UP && !isEditable()
-                && !scaleDetector.isInProgress()) {
-            Layout layout = getLayout();
-            if (layout != null) {
-                int y = (int) ev.getY() + getScrollY() - getTotalPaddingTop();
-                int line = layout.getLineForVertical(Math.max(0, y));
-                float x = ev.getX() + getScrollX() - getTotalPaddingLeft();
-                int offset = layout.getOffsetForHorizontal(line, x);
-                int len = getText().length();
-                setSelection(Math.max(0, Math.min(offset, len)));
-                invalidate();
-            }
-        }
-        return handled;
+		boolean handled = super.onTouchEvent(ev);
+		// In View mode Android's selectable TextView does not consistently
+		// move its selection on a simple tap. Update the read-only caret so
+		// IndentGuides can draw the same active block as in Edit mode.
+		if (action == MotionEvent.ACTION_UP && !isEditable()
+				&& !scaleDetector.isInProgress()) {
+			Layout layout = getLayout();
+			if (layout != null) {
+				int y = (int) ev.getY() + getScrollY() - getTotalPaddingTop();
+				int line = layout.getLineForVertical(Math.max(0, y));
+				float x = ev.getX() + getScrollX() - getTotalPaddingLeft();
+				int offset = layout.getOffsetForHorizontal(line, x);
+				int len = getText().length();
+				setSelection(Math.max(0, Math.min(offset, len)));
+				invalidate();
+			}
+		}
+		return handled;
 	}
 
 	private boolean pinchCancelled;
