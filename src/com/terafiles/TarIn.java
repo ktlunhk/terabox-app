@@ -1,5 +1,6 @@
 package com.terafiles;
 
+import android.util.Log;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -136,6 +137,7 @@ public class TarIn {
 					try {
 						paxSize = Long.parseLong(v);
 					} catch (NumberFormatException e) {
+						Log.w("TeraFiles", "TarIn.parsePax failed", e);
 					}
 				}
 			}
