@@ -1,5 +1,6 @@
 package com.terafiles;
 
+import android.util.Log;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -46,7 +47,12 @@ public class TeraClient {
 	}
 	static final String DOMAIN = "terabox.com";
 	static final String UA = "terabox;1.40.0.132;PC;PC-Windows;10.0.26100;WindowsTeraBox";
-	static final int TIMEOUT = 20000;
+	/** Network timeouts in milliseconds; every HttpURLConnection in the app takes its values from here. */
+	static final int CONNECT_TIMEOUT = 10000; // API calls and challenge images
+	static final int TIMEOUT = 20000; // API read timeout
+	static final int TRANSFER_CONNECT_TIMEOUT = 15000; // download and upload data connections
+	static final int DOWNLOAD_READ_TIMEOUT = 60000;
+	static final int UPLOAD_READ_TIMEOUT = 600000; // the server answers a chunk only after storing it
 	static final Pattern TEMPLATE = Pattern.compile("<script>var templateData = (.*?);</script>", Pattern.DOTALL);
 	static final Pattern HOST_RE = Pattern.compile("(?:^|\\.)(?:1024)?terabox\\.com$", Pattern.CASE_INSENSITIVE);
 
@@ -149,6 +155,7 @@ public class TeraClient {
 						if (Long.parseLong(a.substring(eq + 1).trim()) <= 0)
 							return true;
 					} catch (Exception e) {
+						Log.w("TeraFiles", "TeraClient.expiredCookie failed", e);
 					}
 				}
 			} else if (l.startsWith("expires")) {
@@ -163,6 +170,7 @@ public class TeraClient {
 								return true;
 							break;
 						} catch (Exception e) {
+							Log.w("TeraFiles", "TeraClient.expiredCookie failed", e);
 						}
 					}
 				}
@@ -229,7 +237,7 @@ public class TeraClient {
 		HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
 		try {
 			c.setInstanceFollowRedirects(false);
-			c.setConnectTimeout(10000);
+			c.setConnectTimeout(CONNECT_TIMEOUT);
 			c.setReadTimeout(timeout);
 			c.setRequestMethod(method);
 			c.setRequestProperty("User-Agent", UA);
@@ -469,6 +477,7 @@ public class TeraClient {
 				if (tok.length() > 0)
 					pcftoken = tok;
 			} catch (Exception e) {
+				Log.w("TeraFiles", "TeraClient.updateAppData failed", e);
 			}
 		}
 		if (pcftoken.length() == 0)
@@ -661,8 +670,8 @@ public class TeraClient {
 			HttpURLConnection c = (HttpURLConnection) u.openConnection();
 			try {
 				c.setInstanceFollowRedirects(false);
-				c.setConnectTimeout(15000);
-				c.setReadTimeout(60000);
+				c.setConnectTimeout(TRANSFER_CONNECT_TIMEOUT);
+				c.setReadTimeout(DOWNLOAD_READ_TIMEOUT);
 				c.setRequestProperty("User-Agent", UA);
 				if (HOST_RE.matcher(u.getHost()).find())
 					c.setRequestProperty("Cookie", getCookie());
@@ -699,6 +708,7 @@ public class TeraClient {
 				try {
 					len = Long.parseLong(c.getHeaderField("Content-Length"));
 				} catch (Exception e) {
+					Log.w("TeraFiles", "TeraClient.downloadTo failed", e);
 				}
 				String contentType = c.getContentType();
 				if (contentType != null && (contentType.toLowerCase(java.util.Locale.US).contains("text/html") ||
@@ -852,6 +862,7 @@ public class TeraClient {
 					tok = mm.find() ? mm.group(1) : js;
 				}
 			} catch (Exception e) {
+				Log.w("TeraFiles", "TeraClient.refreshAppData failed", e);
 			}
 		}
 		if (tok.length() == 0) {
@@ -1080,6 +1091,7 @@ public class TeraClient {
 			if (h.length() > 0 && HOST_RE.matcher(h).find())
 				uhost = "https://" + h;
 		} catch (Exception e) {
+			Log.w("TeraFiles", "TeraClient.locateUploadHost failed", e);
 		}
 	}
 
@@ -1158,6 +1170,7 @@ public class TeraClient {
 				tmp.renameTo(f);
 			}
 		} catch (Exception e) {
+			Log.w("TeraFiles", "TeraClient.saveState failed", e);
 		}
 	}
 
@@ -1310,8 +1323,8 @@ public class TeraClient {
 		RandomAccessFile raf = new RandomAccessFile(src, "r");
 		try {
 			c.setInstanceFollowRedirects(false);
-			c.setConnectTimeout(15000);
-			c.setReadTimeout(600000);
+			c.setConnectTimeout(TRANSFER_CONNECT_TIMEOUT);
+			c.setReadTimeout(UPLOAD_READ_TIMEOUT);
 			c.setRequestMethod("POST");
 			c.setRequestProperty("User-Agent", UA);
 			c.setRequestProperty("Cookie", getCookie());
@@ -1390,6 +1403,7 @@ public class TeraClient {
 				return;
 			fileManager("rename", new JSONArray().put(new JSONObject().put("path", got).put("newname", name)));
 		} catch (Exception e) {
+			Log.w("TeraFiles", "TeraClient.fixAutoRename failed", e);
 		}
 	}
 
@@ -1535,6 +1549,7 @@ public class TeraClient {
 			if (j.has("errno") || j.has("error_code"))
 				return errnoOf(j);
 		} catch (Exception e) {
+			Log.w("TeraFiles", "TeraClient.shortUrlErrno failed", e);
 		}
 		return Integer.MIN_VALUE;
 	}
