@@ -263,10 +263,8 @@ public class TeraShares {
 				if (cancelledHere != null && cancelledHere.contains(id))
 					st0 = "cancelled";
 				
-				// Only show shares explicitly reported active by the account API.
 				if ("cancelled".equals(st0))
 					continue;
-				// Unknown is NOT active. Verify it after reading the list.
 				if (!seen.add(id))
 					continue;
 				Share s = new Share();
