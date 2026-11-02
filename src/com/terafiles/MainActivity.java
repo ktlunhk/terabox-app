@@ -25,6 +25,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.text.TextUtils;
 import android.util.Base64;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -61,7 +62,10 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -110,10 +114,16 @@ public class MainActivity extends Activity {
 
 	SharedPreferences prefs;
 	// Navigation and metadata must not wait behind slow file operations.
-	ExecutorService exec = Executors.newFixedThreadPool(3);
-	ExecutorService navigationExec = Executors.newSingleThreadExecutor();
-	ExecutorService metadataExec = Executors.newSingleThreadExecutor();
-	ExecutorService execDl = Executors.newCachedThreadPool();
+	// Same pools as Executors.new...(), but a task submitted after shutdown() is dropped instead of throwing
+	// RejectedExecutionException (late callbacks of a destroyed activity must not crash the app).
+	ExecutorService exec = new ThreadPoolExecutor(3, 3, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(),
+			new ThreadPoolExecutor.DiscardPolicy());
+	ExecutorService navigationExec = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(),
+			new ThreadPoolExecutor.DiscardPolicy());
+	ExecutorService metadataExec = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(),
+			new ThreadPoolExecutor.DiscardPolicy());
+	ExecutorService execDl = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(),
+			new ThreadPoolExecutor.DiscardPolicy());
 	int dp1;
 
 	// session
@@ -184,8 +194,7 @@ public class MainActivity extends Activity {
 		dp1 = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
 		prefs = getSharedPreferences("terafiles", MODE_PRIVATE);
 		TeraClient.resumeDir = new File(getFilesDir(), "resume");
-		if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED)
-			requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, 8);
+		askStartupPermissions();
 		String ck = prefs.getString("cookie", "");
 		if (ck.indexOf("ndus=") >= 0) {
 			client = new TeraClient(ck, prefs.getString("whost", ""));
@@ -224,8 +233,37 @@ public class MainActivity extends Activity {
 		});
 	}
 
+	/**
+	 * Permissions are asked once, when the app is first opened, instead of in the middle of an upload. (Android does not
+	 * let an app receive these at install time.) Notifications first, then file access; the upload and download
+	 * screens still explain and ask again if the user declined here.
+	 */
+	void askStartupPermissions() {
+		if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+			requestPermissions(new String[] { "android.permission.POST_NOTIFICATIONS" }, 8);
+			return; // file access follows in onRequestPermissionsResult, so two prompts never overlap
+		}
+		askStorageOnce();
+	}
+
+	void askStorageOnce() {
+		if (hasLocalAccess() || prefs.getBoolean("accessAsked", false))
+			return;
+		prefs.edit().putBoolean("accessAsked", true).commit();
+		requestAccess();
+	}
+
+	@Override public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+		super.onRequestPermissionsResult(code, perms, results);
+		if (code == 8 && !activityDestroyed)
+			askStorageOnce();
+	}
+
 	@Override protected void onDestroy() {
 		activityDestroyed = true;
+		// Idle pools are shut down now; with transfers running they are shut down when the last one ends
+		// (TransferNotifier.end), because the transfers run on these pools and must survive the activity.
+		TransferNotifier.shutdownWhenIdle(exec, navigationExec, metadataExec, execDl);
 		super.onDestroy();
 	}
 
@@ -326,6 +364,7 @@ public class MainActivity extends Activity {
 				else if (kids[i].lastModified() < cutoff && (suffix == null || kids[i].getName().endsWith(suffix))) kids[i].delete();
 			}
 		} catch (Exception e) {
+			Log.w("TeraFiles", "MainActivity.sweepOld failed", e);
 		}
 	}
 
@@ -657,8 +696,8 @@ public class MainActivity extends Activity {
 			throw new Exception("Unsupported challenge image address.");
 		HttpURLConnection c = (HttpURLConnection) u.openConnection();
 		try {
-			c.setConnectTimeout(10000);
-			c.setReadTimeout(20000);
+			c.setConnectTimeout(TeraClient.CONNECT_TIMEOUT);
+			c.setReadTimeout(TeraClient.TIMEOUT);
 			c.setRequestProperty("User-Agent", TeraClient.UA);
 			InputStream in = c.getInputStream();
 			Bitmap b = BitmapFactory.decodeStream(in);
@@ -1659,6 +1698,7 @@ public class MainActivity extends Activity {
 						}
 					});
 				} catch (Exception e) {
+					Log.w("TeraFiles", "MainActivity.refreshQuota failed", e);
 				}
 			}
 		});
@@ -1692,15 +1732,18 @@ public class MainActivity extends Activity {
 	}
 
 	// ---- menus
+	// One order for every file menu (single item and selection) so shared entries keep the same relative position.
+	static final int ORD_VIEW = 0, ORD_EDIT = 1, ORD_DELETE = 2, ORD_RENAME = 3, ORD_COPY = 4, ORD_MOVE = 5, ORD_ZIP = 6,
+			ORD_TAR = 7, ORD_EXTRACT = 8, ORD_DOWNLOAD = 10, ORD_SHARE = 11;
 
 	void showSelectionMenu(View anchor) {
 		PopupMenu pm = newPopup(anchor);
-		pm.getMenu().add(0, 1, 0, "Delete");
-		pm.getMenu().add(0, 2, 1, "Zip");
-		pm.getMenu().add(0, 3, 2, "Tar");
-		pm.getMenu().add(0, 4, 3, "Copy to...");
-		pm.getMenu().add(0, 5, 4, "Move to...");
-		pm.getMenu().add(0, 6, 5, "Download");
+		pm.getMenu().add(0, 1, ORD_DELETE, "Delete");
+		pm.getMenu().add(0, 4, ORD_COPY, "Copy to...");
+		pm.getMenu().add(0, 5, ORD_MOVE, "Move to...");
+		pm.getMenu().add(0, 2, ORD_ZIP, "Zip");
+		pm.getMenu().add(0, 3, ORD_TAR, "Tar");
+		pm.getMenu().add(0, 6, ORD_DOWNLOAD, "Download");
 		pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
 			public boolean onMenuItemClick(android.view.MenuItem item) {
 				ArrayList<TeraEntry> chosen = selectedEntries();
@@ -1919,24 +1962,25 @@ public class MainActivity extends Activity {
 
 	void showRowMenu(final TeraEntry e, View anchor) {
 		PopupMenu pm = newPopup(anchor);
+		if (canPreview(e))
+			pm.getMenu().add(0, 15, ORD_VIEW, "View");
 		if (!e.isDir && TextEditor.isEditableName(e.name))
-			pm.getMenu().add(0, 14, 0, "Edit");
-		pm.getMenu().add(0, 1, 0, "Delete");
-		pm.getMenu().add(0, 2, 1, "Rename");
-		pm.getMenu().add(0, 3, 2, "Copy to...");
-		pm.getMenu().add(0, 4, 3, "Move to...");
-		pm.getMenu().add(0, 5, 4, "Zip");
-		pm.getMenu().add(0, 6, 5, "Tar");
+			pm.getMenu().add(0, 14, ORD_EDIT, "Edit");
+		pm.getMenu().add(0, 1, ORD_DELETE, "Delete");
+		pm.getMenu().add(0, 2, ORD_RENAME, "Rename");
+		pm.getMenu().add(0, 3, ORD_COPY, "Copy to...");
+		pm.getMenu().add(0, 4, ORD_MOVE, "Move to...");
+		pm.getMenu().add(0, 5, ORD_ZIP, "Zip");
+		pm.getMenu().add(0, 6, ORD_TAR, "Tar");
 		if (!e.isDir && TeraWork.isZipName(e.name)) {
-			pm.getMenu().add(0, 10, 5, "Unzip");
-			pm.getMenu().add(0, 11, 5, "Unzip to folder");
+			pm.getMenu().add(0, 10, ORD_EXTRACT, "Unzip");
+			pm.getMenu().add(0, 11, ORD_EXTRACT + 1, "Unzip to folder");
 		} else if (!e.isDir && TeraWork.isTarName(e.name)) {
-			pm.getMenu().add(0, 12, 5, "Untar");
-			pm.getMenu().add(0, 13, 5, "Untar to folder");
+			pm.getMenu().add(0, 12, ORD_EXTRACT, "Untar");
+			pm.getMenu().add(0, 13, ORD_EXTRACT + 1, "Untar to folder");
 		}
-		if (canPreview(e)) pm.getMenu().add(0, 15, 0, "View");
-		pm.getMenu().add(0, 7, 6, "Download");
-		pm.getMenu().add(0, 8, 7, "Share link");
+		pm.getMenu().add(0, 7, ORD_DOWNLOAD, "Download");
+		pm.getMenu().add(0, 8, ORD_SHARE, "Share link");
 		pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
 			public boolean onMenuItemClick(android.view.MenuItem item) {
 				ArrayList<TeraEntry> one = new ArrayList<TeraEntry>();
@@ -1990,45 +2034,45 @@ public class MainActivity extends Activity {
 	}
 
 	boolean canPreview(TeraEntry e) {
-        if (e.isDir || e.name == null) return false;
-        String n = e.name.toLowerCase(Locale.US);
-        return n.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|mp3|mp4|mkv|webm|mov|avi|3gp|pdf)$");
-    }
+		if (e.isDir || e.name == null) return false;
+		String n = e.name.toLowerCase(Locale.US);
+		return n.matches(".*\\.(jpg|jpeg|png|gif|webp|bmp|heic|mp3|mp4|mkv|webm|mov|avi|3gp|pdf)$");
+	}
 
-    void viewEntry(final TeraEntry e) {
-        if (client == null) return;
-        final TeraClient c = client;
-        final File dir = new File(getCacheDir(), "previews");
-        dir.mkdirs();
-        final File local = new File(dir, System.nanoTime() + "_" + TeraWork.safeSegment(e.name));
-        final JobStatus st = new JobStatus("Opening " + e.name);
-        st.showBusy();
-        execDl.execute(new Runnable() {
-            public void run() {
-                String error = null;
-                try {
-                    c.downloadEntry(e.path, e.fsId, local, e.size, st);
-                } catch (Exception ex) {
-                    error = ex.getMessage() == null ? ex.toString() : ex.getMessage();
-                    local.delete();
-                }
-                st.close();
-                final String failure = error;
-                postIfAlive(new Runnable() {
-                    public void run() {
-                        if (failure != null) {
-                            if (!"Cancelled".equals(failure)) showError(failure);
-                            return;
-                        }
-                        Intent intent = new Intent(MainActivity.this, PreviewActivity.class);
-                        intent.putExtra("path", local.getAbsolutePath());
-                        intent.putExtra("name", e.name);
-                        startActivity(intent);
-                    }
-                });
-            }
-        });
-    }
+	void viewEntry(final TeraEntry e) {
+		if (client == null) return;
+		final TeraClient c = client;
+		final File dir = new File(getCacheDir(), "previews");
+		dir.mkdirs();
+		final File local = new File(dir, System.nanoTime() + "_" + TeraWork.safeSegment(e.name));
+		final JobStatus st = new JobStatus("Opening " + e.name);
+		st.showBusy();
+		execDl.execute(new Runnable() {
+			public void run() {
+				String error = null;
+				try {
+					c.downloadEntry(e.path, e.fsId, local, e.size, st);
+				} catch (Exception ex) {
+					error = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+					local.delete();
+				}
+				st.close();
+				final String failure = error;
+				postIfAlive(new Runnable() {
+					public void run() {
+						if (failure != null) {
+							if (!"Cancelled".equals(failure)) showError(failure);
+							return;
+						}
+						Intent intent = new Intent(MainActivity.this, PreviewActivity.class);
+						intent.putExtra("path", local.getAbsolutePath());
+						intent.putExtra("name", e.name);
+						startActivity(intent);
+					}
+				});
+			}
+		});
+	}
 
 	/** Download a text file to the cache and open it in the editor. */
 	void editEntry(final TeraEntry e) {
@@ -2447,6 +2491,7 @@ public class MainActivity extends Activity {
 									c.recycleAction("delete", purge);
 								} catch (Exception ex) {
 									// the old item then simply stays in the trash
+									Log.w("TeraFiles", "MainActivity.doCopyMove failed", ex);
 								}
 							}
 						}
@@ -3125,7 +3170,9 @@ public class MainActivity extends Activity {
 		if (req == 22) {
 			Uri tree = data.getData();
 			if (tree != null) {
-				try { getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Exception ignored) {}
+				try { getContentResolver().takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION); } catch (Exception ignored) {
+					Log.w("TeraFiles", "MainActivity.onActivityResult failed", ignored);
+				}
 				uploadFolderTree(tree, uploadDir);
 			}
 			return;
@@ -3159,7 +3206,9 @@ public class MainActivity extends Activity {
 		try {
 			cursor = getContentResolver().query(uri, new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
 			if (cursor != null && cursor.moveToFirst()) return safeFolderName(cursor.getString(0));
-		} catch (Exception ignored) {} finally { if (cursor != null) cursor.close(); }
+		} catch (Exception ignored) {
+			Log.w("TeraFiles", "MainActivity.documentName failed", ignored);
+		} finally { if (cursor != null) cursor.close(); }
 		return "Folder";
 	}
 
@@ -3188,6 +3237,7 @@ public class MainActivity extends Activity {
 		try {
 			names.add(documentName(DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))));
 		} catch (Exception e) {
+			Log.w("TeraFiles", "MainActivity.uploadFolderTree failed", e);
 		}
 		checkUploadDup(destination, names, true, new DupAsk() {
 			public void go(DupPlan plan) {
@@ -3437,6 +3487,7 @@ public class MainActivity extends Activity {
 			}
 		} catch (Exception e) {
 			// an unreadable or missing folder counts as empty
+			Log.w("TeraFiles", "MainActivity.remoteNames failed", e);
 		}
 		p.dirs.put(dir, m);
 		return m;
@@ -3491,6 +3542,7 @@ public class MainActivity extends Activity {
 					c.recycleAction("delete", purge);
 				} catch (Exception ex) {
 					// the old item then simply stays in the trash
+					Log.w("TeraFiles", "MainActivity.deleteReplaced failed", ex);
 				}
 			}
 		}
@@ -3566,7 +3618,9 @@ public class MainActivity extends Activity {
 						clash.add(names.get(i));
 				postIfAlive(new Runnable() {
 					public void run() {
-						try { if (chk.isShowing()) chk.dismiss(); } catch (Exception ignored) { }
+						try { if (chk.isShowing()) chk.dismiss(); } catch (Exception ignored) {
+							Log.w("TeraFiles", "MainActivity.checkUploadDup failed", ignored);
+						}
 						if (chkCancel[0]) return;
 						if (clash.isEmpty()) {
 							cb.go(plan);
@@ -3626,6 +3680,7 @@ public class MainActivity extends Activity {
 				c.fileManager("delete", new JSONArray().put(new JSONObject().put("path", got)));
 			} catch (Exception ex) {
 				// harmless leftover
+				Log.w("TeraFiles", "MainActivity.ensureRemoteFolder failed", ex);
 			}
 		}
 		if (have != null) {
@@ -3646,6 +3701,7 @@ public class MainActivity extends Activity {
 					name = cur.getString(ix);
 			}
 		} catch (Exception e) {
+			Log.w("TeraFiles", "MainActivity.displayName failed", e);
 		} finally {
 			if (cur != null)
 				cur.close();
@@ -3916,6 +3972,7 @@ public class MainActivity extends Activity {
 				return d;
 			}
 		} catch (Exception e) {
+			Log.w("TeraFiles", "MainActivity.downloadDir failed", e);
 		}
 		return null;
 	}
@@ -4563,6 +4620,7 @@ public class MainActivity extends Activity {
 				try {
 					c.needToken();
 				} catch (Exception e) {
+					Log.w("TeraFiles", "MainActivity.warmUp failed", e);
 				}
 			}
 		});
