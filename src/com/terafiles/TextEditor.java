@@ -424,6 +424,7 @@ class TextEditor {
 		hideKeyboard();
 		final String text = tv.getText().toString();
 		final MainActivity.JobStatus st = a.new JobStatus("Saving " + entry.name);
+		st.showBusy(); // spinner + Cancel while the remote check and upload run
 		a.execDl.execute(new Runnable() {
 			public void run() {
 				String err = null;
