@@ -14,6 +14,7 @@ import android.text.SpannableStringBuilder;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.text.style.BackgroundColorSpan;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -395,6 +396,7 @@ class TextEditor {
 							try {
 								android.text.Selection.setSelection((Spannable) tv.getText(), ka, kb);
 							} catch (RuntimeException e) {
+								Log.w("TeraFiles", "TextEditor.Thread failed", e);
 							}
 						}
 						hitSpans.clear();
@@ -453,6 +455,7 @@ class TextEditor {
 						try {
 							out.close();
 						} catch (Exception e) {
+							Log.w("TeraFiles", "TextEditor.save failed", e);
 						}
 					}
 					st.message("Uploading " + entry.name);
@@ -623,6 +626,7 @@ class TextEditor {
 			if (imm != null)
 				imm.hideSoftInputFromWindow(a.getWindow().getDecorView().getWindowToken(), 0);
 		} catch (Exception e) {
+			Log.w("TeraFiles", "TextEditor.hideKeyboard failed", e);
 		}
 	}
 
