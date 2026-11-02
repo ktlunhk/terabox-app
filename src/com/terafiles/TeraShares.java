@@ -1,5 +1,6 @@
 package com.terafiles;
 
+import android.util.Log;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.concurrent.*;
@@ -180,6 +181,7 @@ public class TeraShares {
 				if ((st == 1 || st == 2) && !CACHE.containsKey(f[0]))
 					CACHE.put(f[0], new long[] { st, t });
 			} catch (NumberFormatException e) {
+				Log.w("TeraFiles", "TeraShares.importCache failed", e);
 			}
 		}
 	}
@@ -322,6 +324,7 @@ public class TeraShares {
 					remember((String) r[2], state);
 				} catch (Exception ex) {
 					// an inconclusive check leaves the link "unknown" (hidden)
+					Log.w("TeraFiles", "TeraShares.fetchAll failed", ex);
 				}
 				if (listener != null)
 					listener.update(activeOf(out), left, left == 0);
