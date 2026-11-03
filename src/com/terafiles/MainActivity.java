@@ -1734,7 +1734,7 @@ public class MainActivity extends Activity {
 	// ---- menus
 	// One order for every file menu (single item and selection) so shared entries keep the same relative position.
 	static final int ORD_VIEW = 0, ORD_EDIT = 1, ORD_DELETE = 2, ORD_RENAME = 3, ORD_COPY = 4, ORD_MOVE = 5, ORD_ZIP = 6,
-			ORD_TAR = 7, ORD_EXTRACT = 8, ORD_DOWNLOAD = 10, ORD_SHARE = 11;
+			ORD_TAR = 7, ORD_EXTRACT = 8, ORD_DOWNLOAD = 10, ORD_SEND = 11, ORD_SHARE = 12;
 
 	void showSelectionMenu(View anchor) {
 		PopupMenu pm = newPopup(anchor);
@@ -1744,12 +1744,16 @@ public class MainActivity extends Activity {
 		pm.getMenu().add(0, 2, ORD_ZIP, "Zip");
 		pm.getMenu().add(0, 3, ORD_TAR, "Tar");
 		pm.getMenu().add(0, 6, ORD_DOWNLOAD, "Download");
+		pm.getMenu().add(0, 7, ORD_SEND, "Send file");
 		pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
 			public boolean onMenuItemClick(android.view.MenuItem item) {
 				ArrayList<TeraEntry> chosen = selectedEntries();
 				switch (item.getItemId()) {
 				case 1:
 					confirmDelete(chosen);
+					break;
+				case 7:
+					sendEntries(chosen);
 					break;
 				case 2:
 					archiveEntries(chosen, false);
@@ -1980,6 +1984,8 @@ public class MainActivity extends Activity {
 			pm.getMenu().add(0, 13, ORD_EXTRACT + 1, "Untar to folder");
 		}
 		pm.getMenu().add(0, 7, ORD_DOWNLOAD, "Download");
+		if (!e.isDir)
+			pm.getMenu().add(0, 16, ORD_SEND, "Send file");
 		pm.getMenu().add(0, 8, ORD_SHARE, "Share link");
 		pm.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
 			public boolean onMenuItemClick(android.view.MenuItem item) {
@@ -2010,6 +2016,12 @@ public class MainActivity extends Activity {
 				case 8:
 					createShare(e);
 					break;
+				case 16: {
+					ArrayList<TeraEntry> justThis = new ArrayList<TeraEntry>();
+					justThis.add(e);
+					sendEntries(justThis);
+					break;
+				}
 				case 15:
 					viewEntry(e);
 					break;
@@ -4050,6 +4062,119 @@ public class MainActivity extends Activity {
 				});
 			}
 		});
+	}
+
+	/**
+	 * Downloads the chosen files to the app's private cache, then opens Android's share sheet so they can be
+	 * sent through any installed app (messaging, email, cloud, Bluetooth...) without the recipient needing a
+	 * TeraBox account. Folders are skipped: zip them first ("Zip" in the menu), then send the zip.
+	 */
+	void sendEntries(final ArrayList<TeraEntry> items) {
+		final ArrayList<TeraEntry> files = new ArrayList<TeraEntry>();
+		int dirs = 0;
+		for (int i = 0; i < items.size(); i++) {
+			if (items.get(i).isDir)
+				dirs++;
+			else
+				files.add(items.get(i));
+		}
+		if (files.isEmpty()) {
+			toast(dirs > 0 ? "Folders can't be sent directly. Zip the folder first, then send the zip." : "Nothing to send");
+			return;
+		}
+		final TeraClient c = client;
+		if (c == null)
+			return;
+		final File dir = new File(getCacheDir(), "previews");
+		dir.mkdirs();
+		final int skippedFolders = dirs;
+		final JobStatus st = inAppJob("Preparing to send", false);
+		st.showBusy();
+		execDl.execute(new Runnable() {
+			public void run() {
+				final ArrayList<File> local = new ArrayList<File>();
+				String err = null;
+				try {
+					for (int i = 0; i < files.size(); i++) {
+						if (st.cancelled())
+							throw new Exception("Cancelled");
+						TeraEntry e = files.get(i);
+						st.message("(" + (i + 1) + "/" + files.size() + ") " + e.name);
+						File f = new File(dir, System.nanoTime() + "_" + TeraWork.safeSegment(e.name));
+						c.downloadEntry(e.path, e.fsId, f, e.size, st);
+						local.add(f);
+					}
+				} catch (Exception ex) {
+					err = ex.getMessage() == null ? ex.toString() : ex.getMessage();
+				}
+				st.finish(err, local.size() + " file(s) ready to send");
+				final String ferr = err;
+				postIfAlive(new Runnable() {
+					public void run() {
+						if (ferr != null) {
+							for (File f : local)
+								f.delete();
+							if (ferr.equals("Cancelled"))
+								toast("Cancelled");
+							else
+								showErrorResume(ferr, new Runnable() {
+									public void run() {
+										sendEntries(items);
+									}
+								});
+							return;
+						}
+						launchSendChooser(local);
+						if (skippedFolders > 0)
+							toast(skippedFolders + " folder(s) skipped");
+					}
+				});
+			}
+		});
+	}
+
+	/** builds the content:// uris (served by PreviewProvider) and shows the system share sheet for them */
+	void launchSendChooser(ArrayList<File> files) {
+		ArrayList<Uri> uris = new ArrayList<Uri>();
+		for (File f : files)
+			uris.add(new Uri.Builder().scheme("content").authority("com.terafiles.previews").appendPath(f.getName()).build());
+		Intent i;
+		if (uris.size() == 1) {
+			i = new Intent(Intent.ACTION_SEND);
+			i.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+			i.setType(mimeFor(uris.get(0)));
+		} else {
+			i = new Intent(Intent.ACTION_SEND_MULTIPLE);
+			i.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+			i.setType(commonMime(uris));
+		}
+		android.content.ClipData clip = android.content.ClipData.newUri(getContentResolver(), "Files", uris.get(0));
+		for (int k = 1; k < uris.size(); k++)
+			clip.addItem(new android.content.ClipData.Item(uris.get(k)));
+		i.setClipData(clip);
+		i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+		try {
+			startActivity(Intent.createChooser(i, "Send"));
+		} catch (Exception ex) {
+			toast("No app found to send to");
+		}
+	}
+
+	String mimeFor(Uri u) {
+		try {
+			String t = getContentResolver().getType(u);
+			return t != null ? t : "*/*";
+		} catch (Exception e) {
+			return "*/*";
+		}
+	}
+
+	String commonMime(ArrayList<Uri> uris) {
+		String first = mimeFor(uris.get(0));
+		for (int i = 1; i < uris.size(); i++)
+			if (!first.equals(mimeFor(uris.get(i))))
+				return "*/*";
+		return first;
 	}
 
 	// ------------------------------------------------------------------ settings
