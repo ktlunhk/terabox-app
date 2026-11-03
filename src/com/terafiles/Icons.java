@@ -64,6 +64,8 @@ class Icons {
 			return "archive";
 		if (s.startsWith("download"))
 			return "download";
+		if (s.startsWith("send"))
+			return "send";
 		if (s.startsWith("share") || s.startsWith("create link") || s.startsWith("links"))
 			return "link";
 		if (s.equals("details"))
@@ -201,6 +203,12 @@ class Icons {
 				c.drawRoundRect(new RectF(2.5f, 8.5f, 14.5f, 15.5f), 3.5f, 3.5f, p);
 				c.drawRoundRect(new RectF(9.5f, 8.5f, 21.5f, 15.5f), 3.5f, 3.5f, p);
 				c.restore();
+			} else if (name.equals("send")) {
+				line(c, 3f, 12f, 20.5f, 3.5f);
+				line(c, 20.5f, 3.5f, 13.5f, 21f);
+				line(c, 13.5f, 21f, 9.5f, 13f);
+				line(c, 9.5f, 13f, 3f, 12f);
+				line(c, 9.5f, 13f, 20.5f, 3.5f);
 			} else if (name.equals("download")) {
 				line(c, 12f, 3f, 12f, 14.5f);
 				line(c, 7f, 9.8f, 12f, 14.8f, 17f, 9.8f);
