@@ -14,6 +14,7 @@ import android.view.VelocityTracker;
 import android.view.ViewConfiguration;
 import android.widget.EditText;
 import android.widget.OverScroller;
+import com.terafiles.*;
 
 /**
  * Read-only, selectable viewer modelled on the text editor's view: it scrolls ITSELF (no
